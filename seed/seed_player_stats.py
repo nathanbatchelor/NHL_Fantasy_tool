@@ -18,21 +18,6 @@ def get_all_player_data(force_refresh: bool = False):
     """
     Main controller to fetch all player data, using cache if available.
     """
-    skater_summary_cache_file = constants.SKATER_SUMMARY_CACHE
-    skater_realtime_cache_file = constants.SKATER_REALTIME_CACHE
-    goalie_summary_cache_file = constants.GOALIE_SUMMARY_CACHE
-
-    if not force_refresh:
-        print("Checking for cached data...")
-        skater_summary_data = load_data_from_cache(skater_summary_cache_file)
-        skater_realtime_data = load_data_from_cache(skater_realtime_cache_file)
-        goalie_summary_data = load_data_from_cache(goalie_summary_cache_file)
-
-        if skater_summary_data and skater_realtime_data and goalie_summary_data:
-            print("✓ All data loaded from cache.")
-            return skater_summary_data, skater_realtime_data, goalie_summary_data
-        else:
-            print("  ! Cache missing or incomplete. Fetching fresh data...")
 
     print(f"Fetching fresh data for {constants.SEASON_ID}...")
     skater_summary_url = f"{constants.ALL_PlAYERS_URL}/skater/summary?limit=-1&cayenneExp=seasonId={constants.SEASON_ID}"
@@ -42,13 +27,6 @@ def get_all_player_data(force_refresh: bool = False):
     skater_summary_data = fetch_stats_data(skater_summary_url)
     skater_realtime_data = fetch_stats_data(skater_realtime_url)
     goalie_summary_data = fetch_stats_data(goalie_summary_url)
-
-    if skater_summary_data:
-        save_data_to_cache(skater_summary_data, skater_summary_cache_file)
-    if skater_realtime_data:
-        save_data_to_cache(skater_realtime_data, skater_realtime_cache_file)
-    if goalie_summary_data:
-        save_data_to_cache(goalie_summary_data, goalie_summary_cache_file)
 
     return skater_summary_data, skater_realtime_data, goalie_summary_data
 

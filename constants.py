@@ -44,10 +44,11 @@ GOALIE_SUMMARY_CACHE = os.path.join(DATA_DIR, f"goalie_summary_{SEASON_ID}.json"
 
 # Cache for Phase 2 (Schedule Script)
 SCHEDULE_CACHE = os.path.join(DATA_DIR, f"nhl_schedule_{SEASON_ID}.json")
+PLAYER_LOG_CACHE = os.path.join(DATA_DIR, f"player_log_cache_{SEASON_ID}.json")
 
 # Output CSVs
-SKATER_STATS_CSV = os.path.join(DATA_DIR, "skater_stats.csv")
-GOALIE_STATS_CSV = os.path.join(DATA_DIR, "goalie_stats.csv")
+SKATER_STATS_CSV = os.path.join(DATA_DIR, f"skater_stats_{SEASON_ID}.csv")
+GOALIE_STATS_CSV = os.path.join(DATA_DIR, f"goalie_stats_{SEASON_ID}.csv")
 WEEKLY_SCHEDULE_CSV = os.path.join(DATA_DIR, "team_weekly_schedule.csv")
 
 

@@ -18,8 +18,38 @@ from models.api.schedule import GamesResponse
 # Import other utils
 from utils.utils import load_data_from_cache, save_data_to_cache
 
-# --- GLOBAL CACHE for Player Game Logs ---
-_player_log_cache = {}
+
+def load_player_log_cache():
+    """Loads the player log cache from disk, converting string keys to int."""
+    print("Loading player log cache...")
+    data = load_data_from_cache(constants.PLAYER_LOG_CACHE)
+    if not data:
+        print("  ! No player log cache file found. Starting fresh.")
+        return {}
+
+    try:
+        # JSON saves all keys as strings. We must convert them back to integers
+        # for both player IDs (outer keys) and game IDs (inner keys).
+        int_key_cache = {}
+        for player_id_str, games in data.items():
+            int_key_cache[int(player_id_str)] = {
+                int(game_id_str): game_data for game_id_str, game_data in games.items()
+            }
+        print(f"  ✓ Loaded {len(int_key_cache)} players into log cache.")
+        return int_key_cache
+    except Exception as e:
+        print(f"  ! Error loading player log cache: {e}. Starting fresh.")
+        return {}
+
+
+# MODIFIED: Load cache from file
+_player_log_cache = load_player_log_cache()
+
+
+def save_player_log_cache():
+    """Saves the in-memory player log cache to a file."""
+    print("\nSaving player log cache to disk...")
+    save_data_to_cache(_player_log_cache, constants.PLAYER_LOG_CACHE)
 
 
 # --- Player Stats Fetching ---
@@ -111,26 +141,37 @@ def get_player_game_log_data(player_id: int, game_id: int) -> dict:
     Get PP/SH points AND team_abbrev for a specific player and game.
     Caches the entire game log for the player.
     """
-    if player_id not in _player_log_cache:
-        try:
-            log_url = f"{constants.WEB_URL}/player/{player_id}/game-log/{constants.SEASON_ID}/2"
-            time.sleep(0.05)  # Rate limit
-            resp = requests.get(log_url, timeout=10)
-            resp.raise_for_status()
-            log_data = PlayerGameLogResponse(**resp.json())
+    if player_id in _player_log_cache and game_id in _player_log_cache[player_id]:
+        # Cache HIT: We have this player and this game.
+        return _player_log_cache[player_id].get(game_id)
 
-            player_games = {}
-            for game in log_data.gameLog:
-                player_games[game.gameId] = {
-                    "pp_points": game.powerPlayPoints,
-                    "sh_points": game.shorthandedPoints,
-                    "team_abbrev": game.teamAbbrev,
-                }
-            _player_log_cache[player_id] = player_games
-        except (requests.exceptions.RequestException, ValidationError) as e:
-            print(f"  Warning: Could not fetch game log for player {player_id}: {e}")
-            _player_log_cache[player_id] = {}
+    try:
+        log_url = (
+            f"{constants.WEB_URL}/player/{player_id}/game-log/{constants.SEASON_ID}/2"
+        )
+        time.sleep(0.05)  # Rate limit
+        resp = requests.get(log_url, timeout=10)
+        resp.raise_for_status()
+        log_data = PlayerGameLogResponse(**resp.json())
 
+        player_games = {}
+        for game in log_data.gameLog:
+            player_games[game.gameId] = {
+                "pp_points": game.powerPlayPoints,
+                "sh_points": game.shorthandedPoints,
+                "team_abbrev": game.teamAbbrev,
+            }
+
+        # Update/overwrite the player's log in the global cache
+        _player_log_cache[player_id] = player_games
+
+    except (requests.exceptions.RequestException, ValidationError) as e:
+        print(f"  Warning: Could not fetch game log for player {player_id}: {e}")
+        # If fetch fails, ensure we don't keep retrying this session
+        if player_id not in _player_log_cache:
+            _player_log_cache[player_id] = {}  # Add empty entry to prevent re-fetch
+
+    # Return the data for the requested game_id
     return _player_log_cache[player_id].get(
         game_id, {"pp_points": 0, "sh_points": 0, "team_abbrev": "UNK"}
     )
@@ -253,8 +294,8 @@ def process_game(game_data: dict, session: Session) -> tuple[int, int]:
                 session.merge(goalie_log)
                 game_goalies += 1
 
-        session.commit()
-        print(f"   ✓ Saved {game_skaters} skaters, {game_goalies} goalies")
+        # session.commit()
+        print(f"   ✓ Staged {game_skaters} skaters, {game_goalies} goalies")
         return (game_skaters, game_goalies)
     except (requests.exceptions.RequestException, ValidationError, Exception) as e:
         print(f"   ✗ Error processing game {game_id}: {e}")

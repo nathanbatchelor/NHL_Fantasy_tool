@@ -6,6 +6,8 @@ import constants  # Assuming you store your DB path in constants
 from pathlib import Path
 
 from sqlmodel import SQLModel, create_engine
+from models.database import PlayerGameStats, GoalieGameStats
+
 
 # --- Database Setup ---
 
@@ -27,11 +29,10 @@ def init_db():
     # Ensure the 'data' directory exists
     Path(DATABASE_FILE).parent.mkdir(parents=True, exist_ok=True)
 
-    # This creates all tables defined by your SQLModel classes
+    # Now this knows about PlayerGameStats and GoalieGameStats
     SQLModel.metadata.create_all(engine)
     print(f"Database {DATABASE_FILE} and tables created successfully.")
 
 
-# This makes the file runnable from the terminal
 if __name__ == "__main__":
     init_db()

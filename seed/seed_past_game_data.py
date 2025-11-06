@@ -14,7 +14,9 @@ import constants
 
 # Import from the new utility files
 from utils.date_utils import get_schedule_by_date
-from utils.nhl_api_utils import get_schedule, process_game
+from utils.nhl_api_utils import get_schedule, process_game, save_player_log_cache
+
+import time
 
 
 def fetch_and_save_stats():
@@ -70,22 +72,38 @@ def fetch_and_save_stats():
         print("\n5. Fetching and processing games...")
         total_skaters, total_goalies = 0, 0
 
+        COMMIT_BATCH_SIZE = 50
+
         for i, game in enumerate(games_to_fetch, 1):
             print(
                 f"\n[{i}/{len(games_to_fetch)}] Game {int(game['game_id'])} on {game['game_date_str']}"
             )
 
             # === CALL THE REUSABLE FUNCTION ===
+            start_time = time.time()
             skaters, goalies = process_game(game, session)  # From utils
+            end_time = time.time()
+            print(f"Total execution time: {end_time - start_time:.2f} seconds")
 
             total_skaters += skaters
             total_goalies += goalies
+
+            if i % COMMIT_BATCH_SIZE == 0:
+                print(f"   ... Committing batch of {COMMIT_BATCH_SIZE} games ...")
+                session.commit()
+
+        # --- Commit any remaining games ---
+        print("   ... Committing final batch ...")
+        session.commit()
 
         print("\n" + "=" * 60)
         print("SUMMARY")
         print(f"Games processed: {len(games_to_fetch)}")
         print(f"Total skaters saved: {total_skaters}")
         print(f"Total goalies saved: {total_goalies}")
+
+        save_player_log_cache()
+
         print(f"\n✓ Database backfill complete!")
 
 

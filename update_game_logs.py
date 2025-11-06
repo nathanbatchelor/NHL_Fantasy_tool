@@ -20,7 +20,8 @@ import constants
 
 # Import all the necessary helpers from your new utils/ files
 from utils.date_utils import get_schedule_by_date
-from utils.nhl_api_utils import get_schedule, process_game
+from utils.nhl_api_utils import get_schedule, process_game, save_player_log_cache
+import time
 
 
 def update_yesterdays_games():
@@ -93,6 +94,7 @@ def update_yesterdays_games():
     print(f"Games processed: {len(games_to_fetch)}")
     print(f"Total skaters saved: {total_skaters}")
     print(f"Total goalies saved: {total_goalies}")
+    save_player_log_cache()
     print(f"\n✓ Daily update complete!")
 
 
@@ -100,4 +102,7 @@ if __name__ == "__main__":
     # NOTE: We DO NOT run init_db() here.
     # This script assumes the database has already been created
     # by seed/seed_past_game_data.py
+    start_time = time.time()
     update_yesterdays_games()
+    end_time = time.time()
+    print(f"Total execution time: {end_time - start_time:.2f} seconds")
