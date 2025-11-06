@@ -1,0 +1,37 @@
+"""
+This is the central file for all database models and connection logic.
+"""
+
+import constants  # Assuming you store your DB path in constants
+from pathlib import Path
+
+from sqlmodel import SQLModel, create_engine
+
+# --- Database Setup ---
+
+DATABASE_FILE = "data/nhl_stats.db"
+sqlite_url = f"sqlite:///{DATABASE_FILE}"
+
+engine = create_engine(sqlite_url)
+
+
+# --- Initialization Function ---
+
+
+def init_db():
+    """
+    This is the "one-time" initialization function.
+    It creates the database file and all tables if they don't exist.
+    """
+    print("Initializing database...")
+    # Ensure the 'data' directory exists
+    Path(DATABASE_FILE).parent.mkdir(parents=True, exist_ok=True)
+
+    # This creates all tables defined by your SQLModel classes
+    SQLModel.metadata.create_all(engine)
+    print(f"Database {DATABASE_FILE} and tables created successfully.")
+
+
+# This makes the file runnable from the terminal
+if __name__ == "__main__":
+    init_db()

@@ -1,0 +1,63 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Bytecode cache (sometimes created by tooling)
+.pyre/
+.mypy_cache/
+.pytype/
+__pypackages__/
+
+# --- Virtual environments ---
+venv/
+.env/
+.venv/
+env/
+ENV/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# --- Build / packaging ---
+build/
+dist/
+*.egg-info/
+.eggs/
+wheels/
+*.egg
+MANIFEST
+
+# --- Data and generated content ---
+/data/*.db
+/data/*.sqlite
+/data/*.sqlite3
+/data/*.csv
+/data/*.json
+/data/tmp/
+!data/README.md  # keep a placeholder if you want
+
+# --- Logs / debug ---
+*.log
+*.out
+*.err
+logs/
+*.pid
+
+# --- IDE / Editor ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- Testing / coverage ---
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+hypothesis/
+
+# --- OS junk ---
+.DS_Store
+Thumbs.db
