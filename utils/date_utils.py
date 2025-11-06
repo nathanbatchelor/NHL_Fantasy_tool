@@ -9,7 +9,7 @@ from collections import defaultdict
 import constants
 
 
-def get_fantasy_week(date_str: str) -> (int, int):
+def get_fantasy_week(date_str: str) -> tuple[int, int]:
     """
     Get fantasy week number (year, week_num) from a UTC date string.
     Fantasy weeks run Monday-Sunday (ISO week standard).
@@ -22,7 +22,7 @@ def get_fantasy_week(date_str: str) -> (int, int):
     return (iso_calendar.year, iso_calendar.week)
 
 
-def get_week_dates(year: int, week: int) -> (str, str):
+def get_week_dates(year: int, week: int) -> tuple[str, str]:
     """
     Get the Monday (start) and Sunday (end) dates for a given ISO week.
     Returns tuple of (monday_date, sunday_date) as strings.
