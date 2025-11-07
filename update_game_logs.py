@@ -86,6 +86,10 @@ def update_yesterdays_games():
             # === CALL THE REUSABLE FUNCTION ===
             skaters, goalies = process_game(game, session)  # From nhl_api_utils
 
+            if skaters > 0 or goalies > 0:
+                session.commit()
+                print(f"   ✓ Committed {skaters} skaters and {goalies} goalies to DB.")
+
             total_skaters += skaters
             total_goalies += goalies
 
