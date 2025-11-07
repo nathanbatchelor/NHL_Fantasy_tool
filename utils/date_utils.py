@@ -7,9 +7,10 @@ import pytz
 from datetime import datetime, timedelta
 from collections import defaultdict
 import constants
+from utils.nhl_api_utils import get_schedule
 
 
-def get_fantasy_week(date_str: str) -> (int, int):
+def get_fantasy_week(date_str: str) -> tuple[int, int]:
     """
     Get fantasy week number (year, week_num) from a UTC date string.
     Fantasy weeks run Monday-Sunday (ISO week standard).
@@ -22,7 +23,7 @@ def get_fantasy_week(date_str: str) -> (int, int):
     return (iso_calendar.year, iso_calendar.week)
 
 
-def get_week_dates(year: int, week: int) -> (str, str):
+def get_week_dates(year: int, week: int) -> tuple[str, str]:
     """
     Get the Monday (start) and Sunday (end) dates for a given ISO week.
     Returns tuple of (monday_date, sunday_date) as strings.
@@ -50,3 +51,57 @@ def get_schedule_by_date(schedule_by_id: dict) -> dict:
             {"game_id": game_id, "game_date_str": date_key, **game_data}
         )
     return dict(schedule_by_date)
+
+
+def calculate_remaining_week_matchups() -> dict:
+    """
+    Calculates remaining games for all teams from today
+    through the end of the current fantasy week (Mon-Sun).
+
+    Returns:
+        dict: { "TEAM_ABBREV": ["vs OPP (YYYY-MM-DD)", ...], ... }
+    """
+
+    # 1. Get today's date in the correct timezone
+    tz = pytz.timezone(constants.FANTASY_TIMEZONE)
+    today = datetime.now(tz)
+
+    # 2. Find the end of the current week
+    today_weekday_iso = today.isoweekday()  # 1=Mon, 7=Sun
+    end_of_week = today + timedelta(days=7 - today_weekday_iso)
+
+    # 3. Load the full schedule, indexed by date
+    schedule_by_id = get_schedule()
+    schedule_by_date = get_schedule_by_date(schedule_by_id)
+
+    # 4. Find all games from *today* until the end of the week
+    all_remaining_games = []
+    current_day = today
+
+    while current_day.date() <= end_of_week.date():
+        current_day_str = current_day.strftime("%Y-%m-%d")
+        games_on_day = schedule_by_date.get(current_day_str, [])
+        all_remaining_games.extend(games_on_day)
+        current_day += timedelta(days=1)
+
+    # 5. Group the remaining games by team
+    matchups = {}
+    for game in all_remaining_games:
+        home_team = game["home_abbrev"]
+        away_team = game["away_abbrev"]
+        game_date = game["game_date_str"]
+
+        if home_team not in matchups:
+            matchups[home_team] = []
+        if away_team not in matchups:
+            matchups[away_team] = []
+
+        matchups[home_team].append(f"vs {away_team} ({game_date})")
+        matchups[away_team].append(f"@ {home_team} ({game_date})")
+
+    # 6. Sort games by date for clean output
+    for team, games in matchups.items():
+        sorted_games = sorted(games, key=lambda x: x.split(" ")[-1])
+        matchups[team] = sorted_games
+
+    return matchups
