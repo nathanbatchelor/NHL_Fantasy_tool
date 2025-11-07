@@ -1,31 +1,46 @@
+# In: NHL_Fantasy_tool/get_remaining_week_matchups.py
+
 import pytz
 from datetime import datetime, timedelta
-from collections import defaultdict
 import constants
-import json
 
-from utils.date_utils import *
-from utils.nhl_api_utils import get_schedule
+# --- Import the new logic function ---
+from utils.date_utils import calculate_remaining_week_matchups
+
+
+def print_remaining_matchups():
+    """
+    Fetches and prints remaining games for the current fantasy week.
+    """
+    print("=" * 60)
+    print("REMAINING GAMES FOR CURRENT FANTASY WEEK")
+    print("=" * 60)
+
+    # 1. Get today's date info for the printout
+    tz = pytz.timezone(constants.FANTASY_TIMEZONE)
+    today = datetime.now(tz)
+    today_weekday_iso = today.isoweekday()
+    start_of_week = today - timedelta(days=today_weekday_iso - 1)
+    end_of_week = today + timedelta(days=7 - today_weekday_iso)
+
+    print(
+        f"Current Fantasy Week: {start_of_week.strftime('%Y-%m-%d')} to {end_of_week.strftime('%Y-%m-%d')}"
+    )
+    print(f"Today's Date: {today.strftime('%Y-%m-%d')}\n")
+
+    # 2. Call the reusable logic function
+    matchups = calculate_remaining_week_matchups()
+
+    # 3. Print the results
+    print("--- Remaining Matchups ---")
+    for team in constants.NHL_TEAMS:
+        if team in matchups:
+            game_count = len(matchups[team])
+            opponents_str = ", ".join(matchups[team])
+            print(f"  {team} ({game_count} games): {opponents_str}")
+        else:
+            print(f"  {team} (0 games): None")
+
 
 if __name__ == "__main__":
-    today = str(datetime.now(pytz.UTC))
-    year, week = get_fantasy_week(today)
-
-    _, sunday_date = get_week_dates(year, week)
-    print(sunday_date)
-
-    today_as_date = today.split(" ")[0]
-
-    start_date = datetime.strptime(today_as_date, "%Y-%m-%d")
-    end_date = datetime.strptime(sunday_date, "%Y-%m-%d")
-    dates_list = [
-        (start_date + timedelta(days=i)).strftime("%Y-%m-%d")
-        for i in range((end_date - start_date).days + 1)
-    ]
-
-    print(dates_list)
-
-    sched_by_date = get_schedule_by_date(schedule_by_id=get_schedule())
-    for date in dates_list:
-        for game in sched_by_date[date]:
-            print(game)
+    print_remaining_matchups()
