@@ -31,6 +31,7 @@ class GoalieStatsFromBoxscore(BaseModel):
     name: dict  # {"default": "Goalie Name"}
     position: str
     saves: int = 0
+    savePct: float = 0
     goalsAgainst: int = 0
     decision: Optional[str] = None  # "W", "L", or None
 
@@ -67,12 +68,53 @@ class PlayerGameLogEntry(BaseModel):
     """Single game entry - get PP/SH points AND team abbrev"""
 
     gameId: int
-    teamAbbrev: str  # This is what we want!
+    teamAbbrev: str
+    gameDate: str
+
+    # Analysis related stats
     powerPlayPoints: int = 0
     shorthandedPoints: int = 0
+    toi: str
+    shifts: int = 0
+    pim: int = 0
 
 
 class PlayerGameLogResponse(BaseModel):
     """Player game log API response"""
 
     gameLog: list[PlayerGameLogEntry]
+
+
+class FinalPlayerGameStats(BaseModel):
+    """
+    Our new model to combine stats from the PlayerLog (Phase 1)
+    and the Boxscore (Phase 2).
+    """
+
+    # Common keys
+    playerId: int
+    gameId: int
+    teamAbbrev: str
+    gameDate: str
+
+    # From PlayerGameLogEntry (Phase 1)
+    powerPlayPoints: int = 0
+    shorthandedPoints: int = 0
+    toi: str = "00:00"
+    shifts: int = 0
+    pim: int = 0
+
+    # From PlayerStatsFromBoxscore (Phase 2)
+    name: str = "N/A"
+    position: str = "N/A"
+    goals: int = 0
+    assists: int = 0
+    sog: int = 0
+    blockedShots: int = 0
+    hits: int = 0
+
+    # From GoalieStatsFromBoxscore (Phase 2)
+    saves: Optional[int] = None
+    savePct: Optional[float] = None
+    goalsAgainst: Optional[int] = None
+    decision: Optional[str] = None

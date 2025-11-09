@@ -38,7 +38,7 @@ def export_to_csv(team_week_data: dict):
                 writer.writerow(
                     [team, week_key, monday, sunday, week_data["count"], opponents]
                 )
-    print(f"\nSuccessfully Exported weekly schedule to {filepath}")
+    print(f"\n✅Successfully Exported weekly schedule to {filepath}")
 
 
 if __name__ == "__main__":

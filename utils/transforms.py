@@ -32,6 +32,7 @@ def combine_and_get_skater_data(
         pp_points = player_summary.get("ppPoints", 0) or 0
         sh_points = player_summary.get("shPoints", 0) or 0
         shots = player_summary.get("shots", 0) or 0
+        shootingPct = player_summary.get("shootingPct", 0) or 0
         blocks = player_realtime.get("blockedShots", 0) or 0
         hits = player_realtime.get("hits", 0) or 0
         games_played = player_summary.get("gamesPlayed", 1) or 1
@@ -58,6 +59,7 @@ def combine_and_get_skater_data(
             "ppPoints": pp_points,
             "shPoints": sh_points,
             "shots": shots,
+            "shootingPct": shootingPct,
             "blockedShots": blocks,
             "hits": hits,
             "Fpts": round(total_fpts, 2),
@@ -79,6 +81,7 @@ def process_goalie_data(goalie_data: list) -> list:
         wins = goalie.get("wins", 0) or 0
         goals_against = goalie.get("goalsAgainst", 0) or 0
         saves = goalie.get("saves", 0) or 0
+        save_pct = goalie.get("savePct", 0) or 0
         shutouts = goalie.get("shutouts", 0) or 0
         ot_losses = goalie.get("otLosses", 0) or 0
         games_played = goalie.get("gamesPlayed", 1) or 1
@@ -100,6 +103,7 @@ def process_goalie_data(goalie_data: list) -> list:
             "wins": wins,
             "goalsAgainst": goals_against,
             "saves": saves,
+            "savePct": round(save_pct, 2),
             "shutouts": shutouts,
             "otLosses": ot_losses,
             "Fpts": round(total_fpts, 2),

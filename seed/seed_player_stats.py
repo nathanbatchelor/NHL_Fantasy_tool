@@ -10,7 +10,6 @@ import constants
 
 # Import from the new utility files
 from utils.nhl_api_utils import fetch_stats_data
-from utils.utils import save_data_to_cache, load_data_from_cache
 from utils.transforms import combine_and_get_skater_data, process_goalie_data
 
 
@@ -42,10 +41,10 @@ if __name__ == "__main__":
     print("Data loaded. Now merging and processing...")
 
     combined_skater_list = combine_and_get_skater_data(skater_summary, realtime)
-    print(f"Successfully merged {len(combined_skater_list)} players.")
+    print(f"✅ Successfully merged {len(combined_skater_list)} players.")
 
     filtered_goalie_list = process_goalie_data(goalie_summary)
-    print(f"Successfully processed {len(filtered_goalie_list)} goalies.")
+    print(f"✅ Successfully processed {len(filtered_goalie_list)} goalies.")
 
     # Save to CSV
     try:

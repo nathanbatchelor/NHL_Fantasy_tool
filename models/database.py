@@ -27,6 +27,7 @@ class PlayerGameStats(SQLModel, table=True):
 
     # Other stats
     shots: int = 0
+    shooting_pct: float | None = None
     blocked_shots: int = 0
     hits: int = 0
 
@@ -63,6 +64,7 @@ class GoalieGameStats(SQLModel, table=True):
 
     # Goalie stats
     saves: int = 0
+    save_pct: float = 0.0
     goals_against: int = 0
     decision: Optional[str] = Field(default=None)  # W, L, or OT
 

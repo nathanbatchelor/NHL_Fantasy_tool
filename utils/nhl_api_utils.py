@@ -47,12 +47,6 @@ def load_player_log_cache():
 _player_log_cache = load_player_log_cache()
 
 
-def save_player_log_cache():
-    """Saves the in-memory player log cache to a file."""
-    print("\nSaving player log cache to disk...")
-    save_data_to_cache(_player_log_cache, constants.PLAYER_LOG_CACHE)
-
-
 # --- Player Stats Fetching ---
 
 
@@ -234,6 +228,9 @@ def fetch_and_parse_game_data(
                     * constants.SKATER_FPTS_WEIGHTS["blockedShots"]
                     + player.hits * constants.SKATER_FPTS_WEIGHTS["hits"]
                 )
+                s_pct = 0.0
+                if player.sog > 0:
+                    s_pct = round((player.goals / player.sog) * 100, 2)
                 skater_log = PlayerGameStats(
                     game_id=game_id,
                     player_id=player_id,
@@ -246,6 +243,7 @@ def fetch_and_parse_game_data(
                     pp_points=float(game_log_data["pp_points"]),
                     sh_points=float(game_log_data["sh_points"]),
                     shots=player.sog,
+                    shooting_pct=s_pct,
                     blocked_shots=player.blockedShots,
                     hits=player.hits,
                     total_fpts=round(total_fpts, 2),
@@ -280,6 +278,7 @@ def fetch_and_parse_game_data(
                     + shutouts * constants.GOALIE_FPTS_WEIGHTS["shutouts"]
                     + ot_losses * constants.GOALIE_FPTS_WEIGHTS["otLosses"]
                 )
+
                 goalie_log = GoalieGameStats(
                     game_id=game_id,
                     player_id=player_id,
@@ -288,6 +287,7 @@ def fetch_and_parse_game_data(
                     opponent_abbrev=opponent_abbrev,
                     player_name=player_name,
                     saves=goalie.saves,
+                    save_pct=goalie.savePct,
                     goals_against=goalie.goalsAgainst,
                     decision=goalie.decision,
                     wins=wins,
@@ -304,128 +304,3 @@ def fetch_and_parse_game_data(
     except (requests.exceptions.RequestException, ValidationError, Exception) as e:
         print(f"   ✗ Error processing game {game_id}: {e}")
         return ([], [])
-
-
-def process_game(game_data: dict, session: Session) -> tuple[int, int]:
-    """
-    Processes a single game, fetches its boxscore, and saves all
-    player stats to the database.
-
-    Returns: (skaters_saved, goalies_saved)
-    """
-    game_id = int(game_data["game_id"])
-    game_date = game_data["game_date_str"]
-
-    try:
-        boxscore_url = f"{constants.WEB_URL}/gamecenter/{game_id}/boxscore"
-        resp = safe_get(boxscore_url)
-        resp.raise_for_status()
-        boxscore = GameBoxscoreResponse(**resp.json())
-
-        home_abbrev = boxscore.homeTeam.abbrev
-        away_abbrev = boxscore.awayTeam.abbrev
-        game_skaters, game_goalies = 0, 0
-        teams_data = [
-            (boxscore.playerByGameStats.homeTeam, home_abbrev, away_abbrev),
-            (boxscore.playerByGameStats.awayTeam, away_abbrev, home_abbrev),
-        ]
-
-        for team_stats, boxscore_team, boxscore_opponent in teams_data:
-            # === PROCESS SKATERS ===
-            for player in team_stats.forwards + team_stats.defense:
-                player_id = player.playerId
-                player_name = player.name.get("default", "Unknown")
-                game_log_data = get_player_game_log_data(player_id, game_id)
-                team_abbrev = game_log_data["team_abbrev"]
-                opponent_abbrev = (
-                    home_abbrev
-                    if team_abbrev == away_abbrev
-                    else (
-                        away_abbrev if team_abbrev == home_abbrev else boxscore_opponent
-                    )
-                )
-
-                total_fpts = (
-                    player.goals * constants.SKATER_FPTS_WEIGHTS["goals"]
-                    + player.assists * constants.SKATER_FPTS_WEIGHTS["assists"]
-                    + game_log_data["pp_points"]
-                    * constants.SKATER_FPTS_WEIGHTS["ppPoints"]
-                    + game_log_data["sh_points"]
-                    * constants.SKATER_FPTS_WEIGHTS["shPoints"]
-                    + player.sog * constants.SKATER_FPTS_WEIGHTS["shots"]
-                    + player.blockedShots
-                    * constants.SKATER_FPTS_WEIGHTS["blockedShots"]
-                    + player.hits * constants.SKATER_FPTS_WEIGHTS["hits"]
-                )
-                skater_log = PlayerGameStats(
-                    game_id=game_id,
-                    player_id=player_id,
-                    game_date=game_date,
-                    team_abbrev=team_abbrev,
-                    opponent_abbrev=opponent_abbrev,
-                    player_name=player_name,
-                    goals=player.goals,
-                    assists=player.assists,
-                    pp_points=float(game_log_data["pp_points"]),
-                    sh_points=float(game_log_data["sh_points"]),
-                    shots=player.sog,
-                    blocked_shots=player.blockedShots,
-                    hits=player.hits,
-                    total_fpts=round(total_fpts, 2),
-                )
-                session.merge(skater_log)
-                game_skaters += 1
-
-            # === PROCESS GOALIES ===
-            for goalie in team_stats.goalies:
-                if goalie.position != "G":
-                    continue
-                player_id = goalie.playerId
-                player_name = goalie.name.get("default", "Unknown")
-                game_log_data = get_player_game_log_data(player_id, game_id)
-                team_abbrev = game_log_data["team_abbrev"]
-                opponent_abbrev = (
-                    home_abbrev
-                    if team_abbrev == away_abbrev
-                    else (
-                        away_abbrev if team_abbrev == home_abbrev else boxscore_opponent
-                    )
-                )
-
-                wins = 1 if goalie.decision == "W" else 0
-                ot_losses = 1 if goalie.decision == "OT" else 0
-                shutouts = 1 if (wins == 1 and goalie.goalsAgainst == 0) else 0
-
-                total_fpts = (
-                    wins * constants.GOALIE_FPTS_WEIGHTS["wins"]
-                    + goalie.saves * constants.GOALIE_FPTS_WEIGHTS["saves"]
-                    + goalie.goalsAgainst
-                    * constants.GOALIE_FPTS_WEIGHTS["goalsAgainst"]
-                    + shutouts * constants.GOALIE_FPTS_WEIGHTS["shutouts"]
-                    + ot_losses * constants.GOALIE_FPTS_WEIGHTS["otLosses"]
-                )
-                goalie_log = GoalieGameStats(
-                    game_id=game_id,
-                    player_id=player_id,
-                    game_date=game_date,
-                    team_abbrev=team_abbrev,
-                    opponent_abbrev=opponent_abbrev,
-                    player_name=player_name,
-                    saves=goalie.saves,
-                    goals_against=goalie.goalsAgainst,
-                    decision=goalie.decision,
-                    wins=wins,
-                    shutouts=shutouts,
-                    ot_losses=ot_losses,
-                    total_fpts=round(total_fpts, 2),
-                )
-                session.merge(goalie_log)
-                game_goalies += 1
-
-        # session.commit()
-        print(f"   ✓ Staged {game_skaters} skaters, {game_goalies} goalies")
-        return (game_skaters, game_goalies)
-    except (requests.exceptions.RequestException, ValidationError, Exception) as e:
-        print(f"   ✗ Error processing game {game_id}: {e}")
-        session.rollback()
-        return (0, 0)
