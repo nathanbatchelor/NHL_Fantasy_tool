@@ -11,6 +11,8 @@ SEASON_ID = "20252026"
 ALL_PlAYERS_URL = "https://api.nhle.com/stats/rest/en"
 WEB_URL = "https://api-web.nhle.com/v1"
 
+DATABASE_FILE = "data/nhl_stats.db"
+
 # --- FANTASY LEAGUE CONFIG ---
 FANTASY_TIMEZONE = "US/Eastern"  # Options: "US/Eastern", "US/Central", "US/Mountain", "US/Pacific", etc.
 
