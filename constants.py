@@ -39,10 +39,6 @@ GOALIE_FPTS_WEIGHTS = {
 
 # --- DATA FILEPATHS ---
 DATA_DIR = "data"
-# Cache for Phase 1 (Seed Script)
-SKATER_SUMMARY_CACHE = os.path.join(DATA_DIR, f"skater_summary_{SEASON_ID}.json")
-SKATER_REALTIME_CACHE = os.path.join(DATA_DIR, f"skater_realtime_{SEASON_ID}.json")
-GOALIE_SUMMARY_CACHE = os.path.join(DATA_DIR, f"goalie_summary_{SEASON_ID}.json")
 
 # Cache for Phase 2 (Schedule Script)
 SCHEDULE_CACHE = os.path.join(DATA_DIR, f"nhl_schedule_{SEASON_ID}.json")

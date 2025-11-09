@@ -17,24 +17,6 @@ from utils.utils import load_data_from_cache, save_data_to_cache
 from utils.retry_utils import safe_get
 
 
-# --- Player Stats Fetching ---
-
-
-def fetch_stats_data(url: str) -> list:
-    """
-    Fetches data from a specific NHL stats/rest endpoint.
-    (Used by seed_player_stats.py)
-    """
-    print(f"  Fetching from: {url}")
-    try:
-        resp = safe_get(url)
-        resp.raise_for_status()
-        return resp.json().get("data", [])
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching data: {e}")
-        return []
-
-
 # --- Schedule Fetching ---
 
 

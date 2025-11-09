@@ -212,7 +212,7 @@ def write_stats_to_db(game_cache: dict, boxscore_map: dict):
                     # Skater - use merge for upsert
                     shooting_pct = None
                     if stats.sog > 0:
-                        shooting_pct = round((stats.goals / stats.sog) * 100, 2)
+                        shooting_pct = stats.goals / stats.sog
 
                     skater_record = PlayerGameStats(
                         game_id=stats.gameId,
