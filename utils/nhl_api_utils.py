@@ -8,43 +8,13 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from pydantic import ValidationError
-from sqlmodel import Session
 
 import constants
-from models.database import PlayerGameStats, GoalieGameStats
-from models.api.stats import GameBoxscoreResponse, PlayerGameLogResponse
 from models.api.schedule import GamesResponse
 
 # Import other utils
 from utils.utils import load_data_from_cache, save_data_to_cache
 from utils.retry_utils import safe_get
-
-
-def load_player_log_cache():
-    """Loads the player log cache from disk, converting string keys to int."""
-    print("Loading player log cache...")
-    data = load_data_from_cache(constants.PLAYER_LOG_CACHE)
-    if not data:
-        print("  ! No player log cache file found. Starting fresh.")
-        return {}
-
-    try:
-        # JSON saves all keys as strings. We must convert them back to integers
-        # for both player IDs (outer keys) and game IDs (inner keys).
-        int_key_cache = {}
-        for player_id_str, games in data.items():
-            int_key_cache[int(player_id_str)] = {
-                int(game_id_str): game_data for game_id_str, game_data in games.items()
-            }
-        print(f"  ✓ Loaded {len(int_key_cache)} players into log cache.")
-        return int_key_cache
-    except Exception as e:
-        print(f"  ! Error loading player log cache: {e}. Starting fresh.")
-        return {}
-
-
-# MODIFIED: Load cache from file
-_player_log_cache = load_player_log_cache()
 
 
 # --- Player Stats Fetching ---
@@ -53,6 +23,7 @@ _player_log_cache = load_player_log_cache()
 def fetch_stats_data(url: str) -> list:
     """
     Fetches data from a specific NHL stats/rest endpoint.
+    (Used by seed_player_stats.py)
     """
     print(f"  Fetching from: {url}")
     try:
@@ -128,179 +99,5 @@ def get_schedule(force_refresh: bool = False) -> dict:
     return unique_games
 
 
-# --- Game Log Fetching & Processing ---
-
-
-def get_player_game_log_data(player_id: int, game_id: int) -> dict:
-    """
-    Get PP/SH points AND team_abbrev for a specific player and game.
-    Caches the entire game log for the player.
-    """
-    if player_id in _player_log_cache and game_id in _player_log_cache[player_id]:
-        # Cache HIT: We have this player and this game.
-        return _player_log_cache[player_id].get(game_id)
-
-    try:
-        log_url = (
-            f"{constants.WEB_URL}/player/{player_id}/game-log/{constants.SEASON_ID}/2"
-        )
-        resp = safe_get(log_url)
-        resp.raise_for_status()
-        log_data = PlayerGameLogResponse(**resp.json())
-
-        player_games = {}
-        for game in log_data.gameLog:
-            player_games[game.gameId] = {
-                "pp_points": game.powerPlayPoints,
-                "sh_points": game.shorthandedPoints,
-                "team_abbrev": game.teamAbbrev,
-            }
-
-        # Update/overwrite the player's log in the global cache
-        _player_log_cache[player_id] = player_games
-
-    except (requests.exceptions.RequestException, ValidationError) as e:
-        print(f"  Warning: Could not fetch game log for player {player_id}: {e}")
-        # If fetch fails, ensure we don't keep retrying this session
-        if player_id not in _player_log_cache:
-            _player_log_cache[player_id] = {}  # Add empty entry to prevent re-fetch
-
-    # Return the data for the requested game_id
-    return _player_log_cache[player_id].get(
-        game_id, {"pp_points": 0, "sh_points": 0, "team_abbrev": "UNK"}
-    )
-
-
-def fetch_and_parse_game_data(
-    game_data: dict,
-) -> tuple[list[PlayerGameStats], list[GoalieGameStats]]:
-    """
-    Fetches and parses all boxscore and log data for a single game.
-
-    This function is thread-safe as it does NOT interact with the database.
-    It returns the fully-formed PlayerGameStats and GoalieGameStats objects.
-
-    Returns: (list[PlayerGameStats], list[GoalieGameStats])
-    """
-    game_id = int(game_data["game_id"])
-    game_date = game_data["game_date_str"]
-
-    game_skaters_list = []
-    game_goalies_list = []
-
-    try:
-        boxscore_url = f"{constants.WEB_URL}/gamecenter/{game_id}/boxscore"
-        resp = safe_get(boxscore_url)
-        resp.raise_for_status()
-        boxscore = GameBoxscoreResponse(**resp.json())
-
-        home_abbrev = boxscore.homeTeam.abbrev
-        away_abbrev = boxscore.awayTeam.abbrev
-        teams_data = [
-            (boxscore.playerByGameStats.homeTeam, home_abbrev, away_abbrev),
-            (boxscore.playerByGameStats.awayTeam, away_abbrev, home_abbrev),
-        ]
-
-        for team_stats, boxscore_team, boxscore_opponent in teams_data:
-            # === PROCESS SKATERS ===
-            for player in team_stats.forwards + team_stats.defense:
-                player_id = player.playerId
-                player_name = player.name.get("default", "Unknown")
-                game_log_data = get_player_game_log_data(player_id, game_id)
-                team_abbrev = game_log_data["team_abbrev"]
-                opponent_abbrev = (
-                    home_abbrev
-                    if team_abbrev == away_abbrev
-                    else (
-                        away_abbrev if team_abbrev == home_abbrev else boxscore_opponent
-                    )
-                )
-
-                total_fpts = (
-                    player.goals * constants.SKATER_FPTS_WEIGHTS["goals"]
-                    + player.assists * constants.SKATER_FPTS_WEIGHTS["assists"]
-                    + game_log_data["pp_points"]
-                    * constants.SKATER_FPTS_WEIGHTS["ppPoints"]
-                    + game_log_data["sh_points"]
-                    * constants.SKATER_FPTS_WEIGHTS["shPoints"]
-                    + player.sog * constants.SKATER_FPTS_WEIGHTS["shots"]
-                    + player.blockedShots
-                    * constants.SKATER_FPTS_WEIGHTS["blockedShots"]
-                    + player.hits * constants.SKATER_FPTS_WEIGHTS["hits"]
-                )
-                s_pct = 0.0
-                if player.sog > 0:
-                    s_pct = round((player.goals / player.sog) * 100, 2)
-                skater_log = PlayerGameStats(
-                    game_id=game_id,
-                    player_id=player_id,
-                    game_date=game_date,
-                    team_abbrev=team_abbrev,
-                    opponent_abbrev=opponent_abbrev,
-                    player_name=player_name,
-                    goals=player.goals,
-                    assists=player.assists,
-                    pp_points=float(game_log_data["pp_points"]),
-                    sh_points=float(game_log_data["sh_points"]),
-                    shots=player.sog,
-                    shooting_pct=s_pct,
-                    blocked_shots=player.blockedShots,
-                    hits=player.hits,
-                    total_fpts=round(total_fpts, 2),
-                )
-                game_skaters_list.append(skater_log)
-
-            # === PROCESS GOALIES ===
-            for goalie in team_stats.goalies:
-                if goalie.position != "G":
-                    continue
-                player_id = goalie.playerId
-                player_name = goalie.name.get("default", "Unknown")
-                game_log_data = get_player_game_log_data(player_id, game_id)
-                team_abbrev = game_log_data["team_abbrev"]
-                opponent_abbrev = (
-                    home_abbrev
-                    if team_abbrev == away_abbrev
-                    else (
-                        away_abbrev if team_abbrev == home_abbrev else boxscore_opponent
-                    )
-                )
-
-                wins = 1 if goalie.decision == "W" else 0
-                ot_losses = 1 if goalie.decision == "OT" else 0
-                shutouts = 1 if (wins == 1 and goalie.goalsAgainst == 0) else 0
-
-                total_fpts = (
-                    wins * constants.GOALIE_FPTS_WEIGHTS["wins"]
-                    + goalie.saves * constants.GOALIE_FPTS_WEIGHTS["saves"]
-                    + goalie.goalsAgainst
-                    * constants.GOALIE_FPTS_WEIGHTS["goalsAgainst"]
-                    + shutouts * constants.GOALIE_FPTS_WEIGHTS["shutouts"]
-                    + ot_losses * constants.GOALIE_FPTS_WEIGHTS["otLosses"]
-                )
-
-                goalie_log = GoalieGameStats(
-                    game_id=game_id,
-                    player_id=player_id,
-                    game_date=game_date,
-                    team_abbrev=team_abbrev,
-                    opponent_abbrev=opponent_abbrev,
-                    player_name=player_name,
-                    saves=goalie.saves,
-                    save_pct=goalie.savePct,
-                    goals_against=goalie.goalsAgainst,
-                    decision=goalie.decision,
-                    wins=wins,
-                    shutouts=shutouts,
-                    ot_losses=ot_losses,
-                    total_fpts=round(total_fpts, 2),
-                )
-                game_goalies_list.append(goalie_log)
-
-        print(
-            f"   ✓ Parsed game {game_id} ({len(game_skaters_list)}S, {len(game_goalies_list)}G)"
-        )
-        return (game_skaters_list, game_goalies_list)
-    except (requests.exceptions.RequestException, ValidationError, Exception) as e:
-        print(f"   ✗ Error processing game {game_id}: {e}")
-        return ([], [])
+# --- All other functions (like get_player_game_log_data, fetch_and_parse_game_data)
+# --- have been removed as they are now handled by utils/player_stats_fetcher.py

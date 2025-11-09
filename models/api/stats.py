@@ -31,7 +31,7 @@ class GoalieStatsFromBoxscore(BaseModel):
     name: dict  # {"default": "Goalie Name"}
     position: str
     saves: int = 0
-    savePct: float = 0
+    savePctg: float = 0
     goalsAgainst: int = 0
     decision: Optional[str] = None  # "W", "L", or None
 
@@ -115,6 +115,6 @@ class FinalPlayerGameStats(BaseModel):
 
     # From GoalieStatsFromBoxscore (Phase 2)
     saves: Optional[int] = None
-    savePct: Optional[float] = None
+    savePctg: Optional[float] = None
     goalsAgainst: Optional[int] = None
     decision: Optional[str] = None

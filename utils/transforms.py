@@ -81,7 +81,7 @@ def process_goalie_data(goalie_data: list) -> list:
         wins = goalie.get("wins", 0) or 0
         goals_against = goalie.get("goalsAgainst", 0) or 0
         saves = goalie.get("saves", 0) or 0
-        save_pct = goalie.get("savePct", 0) or 0
+        save_pct = goalie.get("savePctg", 0) or 0
         shutouts = goalie.get("shutouts", 0) or 0
         ot_losses = goalie.get("otLosses", 0) or 0
         games_played = goalie.get("gamesPlayed", 1) or 1
@@ -103,7 +103,7 @@ def process_goalie_data(goalie_data: list) -> list:
             "wins": wins,
             "goalsAgainst": goals_against,
             "saves": saves,
-            "savePct": round(save_pct, 2),
+            "savePctg": round(save_pct, 2),
             "shutouts": shutouts,
             "otLosses": ot_losses,
             "Fpts": round(total_fpts, 2),
