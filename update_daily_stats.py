@@ -69,7 +69,7 @@ async def main():
     elapsed = end_time - start_time
 
     print("\n" + "=" * 60)
-    print("✓ DAILY UPDATE COMPLETE!")
+    print("✅ DAILY UPDATE COMPLETE!")
     print("=" * 60)
     print(f"Date updated: {yesterday_str}")
     print(f"Games processed: {len(yesterdays_games)}")

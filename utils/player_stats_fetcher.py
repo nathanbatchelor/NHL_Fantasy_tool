@@ -27,6 +27,15 @@ from datetime import datetime
 from utils.utils import load_data_from_cache, save_data_to_cache
 
 
+# --- HELPERS ---
+def toi_to_seconds(toi_str: str) -> int:
+    try:
+        minutes, seconds = map(int, toi_str.split(":"))
+        return (minutes * 60) + seconds
+    except:
+        return 0
+
+
 # --- Concurrency Settings ---
 CONCURRENCY_LIMIT = 50  # Max concurrent requests
 
@@ -185,6 +194,7 @@ def write_stats_to_db(game_cache: dict, boxscore_map: dict):
                     goalie_record = GoalieGameStats(
                         game_id=stats.gameId,
                         player_id=stats.playerId,
+                        season=constants.SEASON_ID,
                         game_date=stats.gameDate,
                         team_abbrev=stats.teamAbbrev,
                         opponent_abbrev=opponent_abbrev,
@@ -217,6 +227,7 @@ def write_stats_to_db(game_cache: dict, boxscore_map: dict):
                     skater_record = PlayerGameStats(
                         game_id=stats.gameId,
                         player_id=stats.playerId,
+                        season=constants.SEASON_ID,
                         game_date=stats.gameDate,
                         team_abbrev=stats.teamAbbrev,
                         opponent_abbrev=opponent_abbrev,
@@ -230,6 +241,8 @@ def write_stats_to_db(game_cache: dict, boxscore_map: dict):
                         blocked_shots=stats.blockedShots,
                         hits=stats.hits,
                         total_fpts=calculate_fantasy_points_skater(stats),
+                        toi_seconds=toi_to_seconds(stats.toi),
+                        shifts=stats.shifts,
                     )
                     session.merge(skater_record)
                     skater_count += 1
@@ -238,7 +251,7 @@ def write_stats_to_db(game_cache: dict, boxscore_map: dict):
         print(f"Committing {skater_count} skater and {goalie_count} goalie records...")
         session.commit()
 
-    print(f"✓ Database write complete!")
+    print(f"✅ Database write complete!")
     print(f"  - Skaters: {skater_count} records")
     print(f"  - Goalies: {goalie_count} records")
 
@@ -449,7 +462,7 @@ async def process_games(game_ids_to_process: List[int], use_cache: bool):
 
     if updated_count > 0:
         save_data_to_cache(game_stats_cache_on_disk, constants.GAME_STATS_CACHE)
-        print(f"  ✓ Saved {updated_count} games to on-disk cache.")
+        print(f"  ✅ Saved {updated_count} games to on-disk cache.")
     else:
         print("  - On-disk cache is already up-to-date.")
 

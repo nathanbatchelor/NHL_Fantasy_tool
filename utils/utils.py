@@ -15,7 +15,7 @@ def save_data_to_cache(data: list | dict, cache_file: str):
         Path(cache_file).parent.mkdir(parents=True, exist_ok=True)
         with open(cache_file, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
-        print(f"  ✓ Cached data to {cache_file}")
+        print(f"  ✅ Cached data to {cache_file}")
     except Exception as e:
         print(f"  ! Error saving cache to {cache_file}: {e}")
 
@@ -25,7 +25,7 @@ def load_data_from_cache(cache_file: str) -> list | dict | None:
     if os.path.exists(cache_file):
         try:
             with open(cache_file, "r", encoding="utf-8") as f:
-                print(f"  ✓ Loading from cache: {cache_file}")
+                print(f"  ✅ Loading from cache: {cache_file}")
                 return json.load(f)
         except Exception as e:
             print(f"  ! Error loading cache from {cache_file}: {e}")

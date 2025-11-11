@@ -87,7 +87,7 @@ async def main():
     elapsed = end_time - start_time
 
     print("\n" + "=" * 50)
-    print("✓ SEEDING COMPLETE!")
+    print("✅ SEEDING COMPLETE!")
     print("=" * 50)
     print(f"Total games processed: {len(past_game_ids)}")
     print(f"Total execution time: {elapsed:.2f} seconds")

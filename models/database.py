@@ -13,6 +13,7 @@ class PlayerGameStats(SQLModel, table=True):
 
     # Game context
     game_date: str  # ISO format: "2025-11-09"
+    season: str = Field(index=True)
     team_abbrev: str  # Player's team
     opponent_abbrev: str
 
@@ -30,6 +31,9 @@ class PlayerGameStats(SQLModel, table=True):
     shooting_pct: float | None = None
     blocked_shots: int = 0
     hits: int = 0
+
+    toi_seconds: int = 0
+    shifts: int = 0
 
     # Calculated fantasy points
     total_fpts: float = 0.0
@@ -56,6 +60,7 @@ class GoalieGameStats(SQLModel, table=True):
 
     # Game context
     game_date: str
+    season: str = Field(index=True)
     team_abbrev: str  # Goalie's team
     opponent_abbrev: str
 

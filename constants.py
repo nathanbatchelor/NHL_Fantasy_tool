@@ -62,6 +62,7 @@ NHL_TEAMS = [
     "CAR",
     "CHI",
     "COL",
+    "CBJ",
     "DAL",
     "DET",
     "EDM",
@@ -77,6 +78,7 @@ NHL_TEAMS = [
     "PHI",
     "PIT",
     "SJS",
+    "SEA",
     "STL",
     "TBL",
     "TOR",
@@ -85,5 +87,4 @@ NHL_TEAMS = [
     "VGK",
     "WSH",
     "WPG",
-    "SEA",
 ]
