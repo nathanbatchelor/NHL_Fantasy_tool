@@ -7,7 +7,7 @@ to ensure consistency across all scripts.
 import os
 
 # --- API & SEASON CONFIG ---
-SEASON_ID = "20252026"
+SEASON_ID = "20242025"
 ALL_PlAYERS_URL = "https://api.nhle.com/stats/rest/en"
 WEB_URL = "https://api-web.nhle.com/v1"
 

@@ -2,6 +2,27 @@ from sqlmodel import SQLModel, Field, Index
 from typing import Optional
 
 
+class PlayerMap(SQLModel, table=True):
+    """
+    Acts as a 'Rosetta Stone' to map the internal ESPN player ID
+    to our database's official NHL player ID.
+
+    This table should have ONE row per player.
+    """
+
+    __tablename__ = "player_map"
+
+    # Use the official NHL ID as our primary key
+    nhl_id: int = Field(primary_key=True)
+
+    # Store the corresponding ESPN ID
+    # Add an index=True for fast lookups when searching by espn_id
+    espn_id: int = Field(index=True)
+
+    # Store the name for easy debugging
+    player_name: str
+
+
 class PlayerGameStats(SQLModel, table=True):
     """Player statistics for individual games"""
 
