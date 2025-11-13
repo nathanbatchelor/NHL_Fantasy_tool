@@ -3,9 +3,12 @@ seed_player_map.py
 
 One-time script to populate the 'player_map' table.
 It connects to your local NHL stats DB and the ESPN API,
-matches players by normalized full name, and saves (nhl_id, espn_id).
+matches players by normalized full name, and saves (nhl_id, espn_id, ACTUAL_player_name).
 
 This allows much faster and more reliable lookups later.
+
+IMPORTANT: Loops through DATABASE players first to ensure players who actually
+played games take priority over free agents with similar names.
 """
 
 import pandas as pd
@@ -66,7 +69,9 @@ def strip_accents(s: str) -> str:
 
 
 def get_db_players() -> dict:
-    """Returns {normalized_name: nhl_id} for all players in the local DB."""
+    """
+    Returns {normalized_name: (nhl_id, actual_name)} for all players in the local DB.
+    """
     print("Fetching all unique players from nhl_stats.db...")
 
     with engine.connect() as connection:
@@ -75,34 +80,46 @@ def get_db_players() -> dict:
     df_players["normalized_name"] = df_players["player_name"].apply(normalize_name)
 
     # Keep the first occurrence if duplicates exist
-    player_map = (
-        df_players.drop_duplicates(subset="normalized_name")
-        .set_index("normalized_name")["player_id"]
-        .to_dict()
-    )
+    # Return both the nhl_id AND the actual player_name
+    player_map = {}
+    for _, row in df_players.drop_duplicates(subset="normalized_name").iterrows():
+        player_map[row["normalized_name"]] = (row["player_id"], row["player_name"])
 
     print(f"Found {len(player_map)} unique players in local DB.")
     return player_map
+
+
+def get_espn_players(league) -> dict:
+    """
+    Returns {normalized_name: espn_id} for all ESPN players.
+    """
+    print("Fetching all ESPN players...")
+
+    espn_player_map = {}
+    for name, espn_id in league.player_map.items():
+        if isinstance(espn_id, int):
+            normalized = normalize_name(name)
+            if normalized:
+                espn_player_map[normalized] = espn_id
+
+    print(f"Found {len(espn_player_map)} ESPN players.")
+    return espn_player_map
 
 
 # --- Main ---
 
 
 def main():
-    # 1. Get all DB players (normalized name → nhl_id)
+    # 1. Get all DB players (normalized name → (nhl_id, actual_name))
     db_player_map = get_db_players()
 
     # 2. Connect to ESPN league
     league = connect_espn.connect()
 
-    # 3. Get all ESPN players (espn_id, normalized_name)
-    espn_players = [
-        (espn_id, normalize_name(name))
-        for name, espn_id in league.player_map.items()
-        if isinstance(espn_id, int)
-    ]
+    # 3. Get all ESPN players (normalized_name → espn_id)
+    espn_player_map = get_espn_players(league)
 
-    if not espn_players:
+    if not espn_player_map:
         print("Could not fetch ESPN players. Exiting.")
         return
 
@@ -112,23 +129,28 @@ def main():
     unmatched_count = 0
 
     with Session(engine) as session:
-        for espn_id, normalized_espn_name in espn_players:
-            if espn_id in getattr(constants, "AVOID_PLAYER_ESPN_IDS", []):
+        # CRITICAL: Loop through DATABASE players first!
+        # This ensures players who actually played games get priority
+        for normalized_name, (nhl_id, actual_player_name) in db_player_map.items():
+
+            # Skip players in the avoid list
+            espn_id = espn_player_map.get(normalized_name)
+            if espn_id and espn_id in getattr(constants, "AVOID_PLAYER_ESPN_IDS", []):
                 continue
 
-            print(normalized_espn_name)
+            if espn_id:
+                print(f"✓ {actual_player_name} (NHL:{nhl_id} → ESPN:{espn_id})")
 
-            nhl_id = db_player_map.get(normalized_espn_name)
-            if nhl_id:
-                # Create or update entry
+                # Create or update entry using the ACTUAL name from the database
                 player_map_entry = PlayerMap(
                     nhl_id=int(nhl_id),
                     espn_id=espn_id,
-                    player_name=normalized_espn_name,
+                    player_name=actual_player_name,
                 )
                 session.merge(player_map_entry)
                 matched_count += 1
             else:
+                print(f"✗ {actual_player_name} (no ESPN match)")
                 unmatched_count += 1
 
         session.commit()
@@ -137,8 +159,9 @@ def main():
     print(" PLAYER MAP SEEDING COMPLETE")
     print("=" * 50)
     print(f"  ✓ Matched:   {matched_count} players")
-    print(f"  ! Unmatched: {unmatched_count} players")
+    print(f"  ✗ Unmatched: {unmatched_count} players")
     print("\nYour 'player_map' table is now populated.")
+    print("Players who actually played games were prioritized over free agents.")
 
 
 if __name__ == "__main__":
