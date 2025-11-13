@@ -9,6 +9,7 @@ class TeamInfoAPI(BaseModel):
     """Basic team info"""
 
     abbrev: str
+    commonName: dict
 
 
 class PlayerStatsFromBoxscore(BaseModel):

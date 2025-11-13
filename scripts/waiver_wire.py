@@ -2,8 +2,9 @@
 waiver_wire.py
 
 This tool connects to your ESPN league, finds all available free agents,
-and then queries your local database to find which of them are
-the "hottest" players over the last 14 days.
+including those on IR, waivers, or marked unavailable, and then queries
+your local database to find which of them are the "hottest" players
+over the last 14 days.
 """
 
 from connect_espn import connect
@@ -16,15 +17,52 @@ from sqlmodel import text
 def get_free_agent_nhl_ids(league) -> list[int]:
     """
     Connects to ESPN and returns a list of all NHL IDs
-    for players who are currently free agents.
+    for players who are currently free agents, on waivers,
+    or marked as unavailable (includes IR/IR+ players).
     """
-    print("Fetching all available free agents from ESPN...")
-    free_agents = league.free_agents(size=2000)
-    espn_id_list = [player.playerId for player in free_agents]
-    print(f"Found {len(espn_id_list)} free agents available.")
+    print(
+        "Fetching all available players from ESPN (FA + WAIVERS + UNAVAILABLE + IR)..."
+    )
+    all_espn_players = []
+    seen_ids = set()
 
-    if not espn_id_list:
+    # Try to grab all possible free agent pools
+    for status in ["FREEAGENT", "WAIVERS", "UNAVAILABLE"]:
+        try:
+            pool = league.free_agents(size=2000, status=status)
+        except TypeError:
+            # fallback for versions that don't support the 'status' param
+            try:
+                pool = league.free_agents(size=2000)
+            except Exception:
+                pool = []
+        except Exception:
+            pool = []
+
+        if not pool:
+            continue
+
+        for player in pool:
+            if player.playerId not in seen_ids:
+                seen_ids.add(player.playerId)
+                all_espn_players.append(player)
+
+    print(f"Found {len(all_espn_players)} total available players across all pools.")
+
+    if not all_espn_players:
         return []
+
+    # Separate IR players for visibility
+    ir_players = [
+        p for p in all_espn_players if getattr(p, "injuryStatus", "") in ("IR", "IR+")
+    ]
+    if ir_players:
+        print("\nPlayers currently on IR/IR+ but available:")
+        for p in ir_players:
+            print(f"  (IR) {p.name} [{p.proTeam}]")
+
+    # Get all ESPN IDs
+    espn_id_list = [p.playerId for p in all_espn_players]
 
     placeholders = ",".join([f":id{i}" for i in range(len(espn_id_list))])
     query = text(
@@ -38,12 +76,12 @@ def get_free_agent_nhl_ids(league) -> list[int]:
     params = {f"id{i}": espn_id_list[i] for i in range(len(espn_id_list))}
 
     nhl_id_list = []
-    print("Cross-referencing ESPN IDs with player_map table...")
+    print("\nCross-referencing ESPN IDs with player_map table...")
     with engine.connect() as conn:
         result = conn.execute(query, params)
         nhl_id_list = [row[0] for row in result]
 
-    print(f"Found {len(nhl_id_list)} mapped NHL IDs for free agents.")
+    print(f"Found {len(nhl_id_list)} mapped NHL IDs for available players.")
     return nhl_id_list
 
 
@@ -82,7 +120,7 @@ def get_hot_players(nhl_id_list: list[int]) -> pd.DataFrame:
     params = {"current_season": constants.SEASON_ID}
     params.update({f"id{i}": nhl_id_list[i] for i in range(len(nhl_id_list))})
 
-    print("Querying database for top 25 hottest free agents...")
+    print("Querying database for top 25 hottest available players (last 14 days)...")
     with engine.connect() as conn:
         df = pd.read_sql(query, conn, params=params)
 
@@ -96,7 +134,7 @@ def main():
         print("Failed to connect to ESPN league.")
         return
 
-    # 2. Get the list of NHL IDs for all available free agents
+    # 2. Get the list of NHL IDs for all available free agents (includes IRs)
     free_agent_nhl_ids = get_free_agent_nhl_ids(league)
     if not free_agent_nhl_ids:
         print("No mapped free agents found. Exiting.")

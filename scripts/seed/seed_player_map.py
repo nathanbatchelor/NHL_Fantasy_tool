@@ -1,18 +1,15 @@
 """
 seed_player_map.py
 
-One-time script to populate the 'player_map' table.
-It connects to your local NHL stats DB and the ESPN API,
-matches players by normalized full name, and saves (nhl_id, espn_id, ACTUAL_player_name).
-
-This allows much faster and more reliable lookups later.
-
-IMPORTANT: Loops through DATABASE players first to ensure players who actually
-played games take priority over free agents with similar names.
+Improved seeder that:
+- Always prioritizes DB players (only DB players are written)
+- Indexes ESPN players more aggressively (team.roster, free agents, attempted statuses)
+- Includes rostered IR players explicitly
+- Uses deterministic fallbacks and a fuzzy-name fallback to catch minor name differences
+- Logs reasons for match / mismatch for quick debugging
 """
 
 import pandas as pd
-from espn_api.hockey import League
 from sqlmodel import Session
 from database import engine
 from models.database import PlayerMap
@@ -20,149 +17,329 @@ import connect_espn
 import constants
 import unicodedata
 import re
+from difflib import get_close_matches
 
 # --- Configuration ---
 
 QUERY_DB_PLAYERS = """
-    SELECT player_id, player_name
+    SELECT player_id, player_name, team_abbrev
     FROM player_game_stats
     WHERE player_name IS NOT NULL
-    
+
     UNION
-    
-    SELECT player_id, player_name
+
+    SELECT player_id, player_name, team_abbrev
     FROM goalie_game_stats
     WHERE player_name IS NOT NULL
 """
 
-
-def normalize_name(name: str) -> str:
-    """Convert a player's full name to a normalized key like 'tstutzle' or 'jvanriemsdyk'."""
-    if not isinstance(name, str) or not name.strip():
-        return ""
-
-    # Normalize whitespace and lowercase
-    name = re.sub(r"\s+", " ", name.strip().lower())
-
-    # Split words and keep all after the first as the 'last name'
-    parts = name.split()
-    if len(parts) == 1:
-        return strip_accents(parts[0])  # single name fallback
-
-    first_name = parts[0]
-    last_name = " ".join(parts[1:])  # handle 'van', 'de', etc.
-
-    # Strip accents
-    first_name = strip_accents(first_name)
-    last_name = strip_accents(last_name)
-
-    # Remove spaces and hyphens from last name to keep it consistent
-    last_name = re.sub(r"[\s\-]", "", last_name)
-
-    return f"{first_name[0]}{last_name}"
+# --- Helpers ---
 
 
 def strip_accents(s: str) -> str:
-    """Remove accent marks from a string."""
-    nfkd_form = unicodedata.normalize("NFKD", s)
+    nfkd_form = unicodedata.normalize("NFKD", s or "")
     return "".join(c for c in nfkd_form if not unicodedata.combining(c))
+
+
+def clean_name_for_split(name: str) -> str:
+    """Lowercase, normalize whitespace, remove hyphens, keep initials together (jt -> jt)."""
+    if not name:
+        return ""
+    name = name.strip().lower()
+    name = name.replace("-", " ")
+    # Insert space if compressed initial like "d.jiricek" -> "d. jiricek"
+    name = re.sub(r"([a-z])\.([a-z])", r"\1. \2", name)
+    # Remove dots completely so "j.t." -> "jt"
+    name = name.replace(".", "")
+    name = re.sub(r"\s+", " ", name).strip()
+    return name
+
+
+def build_name_forms(name: str):
+    """
+    Produce:
+      - primary_key: first initial + last (jmiller)
+      - extended_key: all initials / first part + last (jtmiller or jamessurname if full)
+      - cleaned_full: cleaned 'first last' with accents removed (for fuzzy)
+    """
+    cleaned = clean_name_for_split(name)
+    if not cleaned:
+        return "", "", ""
+
+    parts = cleaned.split()
+    if len(parts) == 1:
+        last = strip_accents(parts[0])
+        return last, last, last
+
+    first_part = "".join(
+        [c for c in parts[0] if c.isalpha()]
+    )  # can be 'j' or 'jt' or 'james'
+    last = "".join(parts[1:])
+    last = strip_accents(last)
+    first_part = strip_accents(first_part)
+
+    primary = f"{first_part[0]}{last}"  # j + miller
+    extended = (
+        f"{first_part}{last}" if len(first_part) > 1 else primary
+    )  # jt + miller or james + miller
+    cleaned_full = f"{first_part} {last}"
+
+    primary = re.sub(r"[\s\-]", "", primary)
+    extended = re.sub(r"[\s\-]", "", extended)
+    cleaned_full = re.sub(r"\s+", " ", cleaned_full).strip()
+
+    return primary, extended, cleaned_full
+
+
+# --- Fetchers ---
 
 
 def get_db_players() -> dict:
     """
-    Returns {normalized_name: (nhl_id, actual_name)} for all players in the local DB.
+    Return mapping: primary_key -> (nhl_id, actual_name)
+    Deduplicate by player_id (keep last).
     """
-    print("Fetching all unique players from nhl_stats.db...")
+    print("Fetching players from DB...")
+    with engine.connect() as conn:
+        df = pd.read_sql(QUERY_DB_PLAYERS, conn)
 
-    with engine.connect() as connection:
-        df_players = pd.read_sql(QUERY_DB_PLAYERS, connection)
+    # Dedupe by player_id so a traded player doesn't create multiple DB entries
+    if "player_id" in df.columns:
+        df = df.drop_duplicates(subset=["player_id"], keep="last")
 
-    df_players["normalized_name"] = df_players["player_name"].apply(normalize_name)
-
-    # Keep the first occurrence if duplicates exist
-    # Return both the nhl_id AND the actual player_name
+    df["primary_key"] = df["player_name"].apply(lambda n: build_name_forms(n)[0])
+    # keep DB canonical name when duplicates by primary_key appear (rare)
     player_map = {}
-    for _, row in df_players.drop_duplicates(subset="normalized_name").iterrows():
-        player_map[row["normalized_name"]] = (row["player_id"], row["player_name"])
+    for _, row in df.iterrows():
+        player_map[row["primary_key"]] = (row["player_id"], row["player_name"])
 
-    print(f"Found {len(player_map)} unique players in local DB.")
+    print(f"Found {len(player_map)} unique DB players (primary keys).")
     return player_map
 
 
 def get_espn_players(league) -> dict:
     """
-    Returns {normalized_name: espn_id} for all ESPN players.
+    Return a dictionary mapping many keys -> espn_id, and a reverse map id -> canonical name.
+    Keys include primary and extended forms and the cleaned full name.
+    Values are single ints or lists if collisions occur; collisions are preserved.
     """
-    print("Fetching all ESPN players...")
+    print("Indexing ESPN players (rosters + free agents + extra statuses)...")
+    espn_map = {}
+    espn_id_to_name = {}
 
-    espn_player_map = {}
-    for name, espn_id in league.player_map.items():
-        if isinstance(espn_id, int):
-            normalized = normalize_name(name)
-            if normalized:
-                espn_player_map[normalized] = espn_id
+    def add_key(key: str, espn_id: int):
+        if not key:
+            return
+        existing = espn_map.get(key)
+        if existing is None:
+            espn_map[key] = espn_id
+        else:
+            # convert to list if collision with different id
+            if isinstance(existing, int):
+                if existing != espn_id:
+                    espn_map[key] = [existing, espn_id]
+            else:
+                if espn_id not in existing:
+                    existing.append(espn_id)
 
-    print(f"Found {len(espn_player_map)} ESPN players.")
-    return espn_player_map
+    def index_player_obj(p):
+        # p is espn_api.hockey.Player
+        primary, extended, cleaned_full = build_name_forms(p.name)
+        add_key(primary, p.playerId)
+        add_key(extended, p.playerId)
+        add_key(cleaned_full.replace(" ", ""), p.playerId)  # "jt miller" -> "jtmiller"
+        espn_id_to_name[p.playerId] = p.name
+
+    # rostered players (includes IR on team roster)
+    for team in league.teams:
+        for p in team.roster:
+            index_player_obj(p)
+
+    # attempt to include free agents and waivers if available
+    # try a larger size; wrap in try/except because some leagues or versions may differ
+    for status in (None, "FREEAGENT", "WAIVERS"):
+        try:
+            if status is None:
+                # some espn_api versions accept league.free_agents() with no args
+                players = league.free_agents(size=3000)
+            else:
+                players = league.free_agents(size=3000, status=status)
+            for p in players:
+                index_player_obj(p)
+        except TypeError:
+            # older/newer versions of espn_api might not accept status param
+            try:
+                players = league.free_agents(size=3000)
+                for p in players:
+                    index_player_obj(p)
+            except Exception:
+                # give up this status quietly
+                pass
+        except Exception:
+            # catch other failure but continue
+            pass
+
+    print(f"Indexed ~{len(espn_map)} distinct keys from ESPN (approx).")
+    return espn_map, espn_id_to_name
 
 
-# --- Main ---
+# --- Matching logic (DB-first) ---
+
+
+def resolve_collision(val):
+    """If val is int -> return it; if list -> deterministic pick first and log."""
+    if val is None:
+        return None
+    if isinstance(val, int):
+        return val
+    if isinstance(val, list) and val:
+        # deterministic: choose first but warn — DB-first policy ensures we'll only accept if DB player exists
+        print(
+            f"⚠️ ESPN key collision: multiple ESPN IDs {val} — choosing first deterministically."
+        )
+        return val[0]
+    return None
+
+
+def fuzzy_match_db_to_espn(db_cleaned_full: str, espn_keys: list[str], cutoff=0.86):
+    """
+    Use difflib.get_close_matches on cleaned names (no spaces) to find candidate ESPN key.
+    Returns key or None.
+    """
+    if not db_cleaned_full:
+        return None
+    # prepare candidates without spaces to maximize match potential
+    candidates = [
+        k for k in espn_keys if k
+    ]  # espn keys are already without spaces in many cases
+    # try direct match first
+    if db_cleaned_full in candidates:
+        return db_cleaned_full
+    # use close matches on strings (we'll operate on no-space forms)
+    matches = get_close_matches(db_cleaned_full, candidates, n=3, cutoff=cutoff)
+    return matches[0] if matches else None
 
 
 def main():
-    # 1. Get all DB players (normalized name → (nhl_id, actual_name))
-    db_player_map = get_db_players()
-
-    # 2. Connect to ESPN league
+    db_map = get_db_players()
     league = connect_espn.connect()
-
-    # 3. Get all ESPN players (normalized_name → espn_id)
-    espn_player_map = get_espn_players(league)
-
-    if not espn_player_map:
-        print("Could not fetch ESPN players. Exiting.")
+    if not league:
+        print("Could not connect to ESPN. Exiting.")
         return
 
-    print("\nMatching players and populating 'player_map' table...")
+    espn_map, espn_id_to_name = get_espn_players(league)
+    if not espn_map:
+        print("Could not index ESPN players. Exiting.")
+        return
 
-    matched_count = 0
-    unmatched_count = 0
+    espn_keys_list = list(espn_map.keys())
+
+    print(
+        "\nMatching DB players (DB-first). Will attempt deterministic and fuzzy fallbacks.\n"
+    )
+    matched = 0
+    unmatched = 0
+    newly_matched_via_fuzzy = []
 
     with Session(engine) as session:
-        # CRITICAL: Loop through DATABASE players first!
-        # This ensures players who actually played games get priority
-        for normalized_name, (nhl_id, actual_player_name) in db_player_map.items():
+        for db_key, (nhl_id, db_name) in db_map.items():
+            # Build name forms from DB canonical name
+            primary, extended, cleaned_full = build_name_forms(db_name)
+            cleaned_nospace = cleaned_full.replace(" ", "")
 
-            # Skip players in the avoid list
-            espn_id = espn_player_map.get(normalized_name)
+            match_reason = None
+            espn_id = None
+
+            # 1) direct primary key
+            val = espn_map.get(primary)
+            espn_id = resolve_collision(val)
+            if espn_id:
+                match_reason = f"primary key '{primary}'"
+
+            # 2) extended key (e.g., J.T vs J.)
+            if not espn_id:
+                val = espn_map.get(extended)
+                espn_id = resolve_collision(val)
+                if espn_id:
+                    match_reason = f"extended key '{extended}'"
+
+            # 3) cleaned_full nospace (e.g., 'jtmiller')
+            if not espn_id:
+                val = espn_map.get(cleaned_nospace)
+                espn_id = resolve_collision(val)
+                if espn_id:
+                    match_reason = f"cleaned full '{cleaned_nospace}'"
+
+            # 4) last-name suffix scan (endswith) — safe: DB-first ensures we only accept if DB player exists
+            if not espn_id:
+                candidate = (
+                    next((k for k in espn_keys_list if k.endswith(primary[1:])), None)
+                    if len(primary) > 1
+                    else None
+                )
+                if candidate:
+                    espn_id = resolve_collision(espn_map.get(candidate))
+                    if espn_id:
+                        match_reason = f"suffix scan match '{candidate}'"
+
+            # 5) fuzzy fallback (closest cleaned_no_space)
+            if not espn_id:
+                fuzzy_key = fuzzy_match_db_to_espn(
+                    cleaned_nospace, espn_keys_list, cutoff=0.86
+                )
+                if fuzzy_key:
+                    espn_id = resolve_collision(espn_map.get(fuzzy_key))
+                    if espn_id:
+                        match_reason = f"fuzzy match '{fuzzy_key}'"
+                        newly_matched_via_fuzzy.append(
+                            (db_name, primary, fuzzy_key, espn_id)
+                        )
+
+            # Finally, check avoid list
             if espn_id and espn_id in getattr(constants, "AVOID_PLAYER_ESPN_IDS", []):
-                continue
+                print(f"Skipping {db_name} because ESPN ID {espn_id} is in avoid list.")
+                espn_id = None
+                match_reason = None
 
             if espn_id:
-                print(f"✓ {actual_player_name} (NHL:{nhl_id} → ESPN:{espn_id})")
-
-                # Create or update entry using the ACTUAL name from the database
-                player_map_entry = PlayerMap(
-                    nhl_id=int(nhl_id),
-                    espn_id=espn_id,
-                    player_name=actual_player_name,
+                espn_name = espn_id_to_name.get(espn_id, "Unknown")
+                print(
+                    f"✓ {db_name} (NHL:{nhl_id}) ↔ ESPN:{espn_id} [{espn_name}]  -- matched by {match_reason}"
                 )
-                session.merge(player_map_entry)
-                matched_count += 1
+                session.merge(
+                    PlayerMap(nhl_id=int(nhl_id), espn_id=espn_id, player_name=db_name)
+                )
+                matched += 1
             else:
-                print(f"✗ {actual_player_name} (no ESPN match)")
-                unmatched_count += 1
+                print(
+                    f"✗ {db_name} (no ESPN match) -- tried keys: primary='{primary}', extended='{extended}', cleaned='{cleaned_nospace}'"
+                )
+                unmatched += 1
 
         session.commit()
 
     print("\n" + "=" * 50)
     print(" PLAYER MAP SEEDING COMPLETE")
     print("=" * 50)
-    print(f"  ✓ Matched:   {matched_count} players")
-    print(f"  ✗ Unmatched: {unmatched_count} players")
-    print("\nYour 'player_map' table is now populated.")
-    print("Players who actually played games were prioritized over free agents.")
+    print(f"  ✓ Matched:   {matched}")
+    print(f"  ✗ Unmatched: {unmatched}")
+
+    if newly_matched_via_fuzzy:
+        print(
+            "\nNote: the following DB entries were only matched via fuzzy fallback (inspect):"
+        )
+        for db_name, primary, fuzzy_key, espn_id in newly_matched_via_fuzzy:
+            print(
+                f"  - {db_name} (primary={primary}) -> fuzzy_key={fuzzy_key} -> ESPN:{espn_id} [{espn_id_to_name.get(espn_id)}]"
+            )
+
+    print("\nOnly DB players were written. Fuzzy matches are logged above for review.")
+    print(
+        "If many players remain unmatched, run the script with smaller free_agent size increments or inspect unmatched primary keys."
+    )
 
 
 if __name__ == "__main__":
     main()
+
+# TODO: if a new player gets added, we need to automatically detect this in our daily script and add them to the player_map

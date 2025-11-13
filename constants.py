@@ -8,7 +8,6 @@ import os
 
 # --- API & SEASON CONFIG ---
 SEASON_ID = "20252026"
-ALL_PlAYERS_URL = "https://api.nhle.com/stats/rest/en"
 WEB_URL = "https://api-web.nhle.com/v1"
 
 DATABASE_FILE = "data/nhl_stats.db"
@@ -50,6 +49,45 @@ GAME_STATS_CACHE = os.path.join(DATA_DIR, f"game_stats_cache_{SEASON_ID}.json")
 WEEKLY_SCHEDULE_CSV = os.path.join(DATA_DIR, "team_weekly_schedule.csv")
 
 AVOID_PLAYER_ESPN_IDS = [5238086]
+
+TEAM_MAP = {
+    "BOS": "Boston Bruins",
+    "BUF": "Buffalo Sabres",
+    "CGY": "Calgary Flames",
+    "CHI": "Chicago Blackhawks",
+    "DET": "Detroit Red Wings",
+    "EDM": "Edmonton Oilers",
+    "CAR": "Carolina Hurricanes",
+    "LAK": "Los Angeles Kings",
+    "DAL": "Dallas Stars",
+    "MTL": "Montréal Canadiens",
+    "NJD": "New Jersey Devils",
+    "NYI": "New York Islanders",
+    "NYR": "New York Rangers",
+    "OTT": "Ottawa Senators",
+    "PHI": "Philadelphia Flyers",
+    "PIT": "Pittsburgh Penguins",
+    "COL": "Colorado Avalanche",
+    "SJS": "San Jose Sharks",
+    "STL": "St. Louis Blues",
+    "TBL": "Tampa Bay Lightning",
+    "TOR": "Toronto Maple Leafs",
+    "VAN": "Vancouver Canucks",
+    "WSH": "Washington Capitals",
+    "ANA": "Anaheim Ducks",
+    "FLA": "Florida Panthers",
+    "NSH": "Nashville Predators",
+    "WPG": "Winnipeg Jets",
+    "CBJ": "Columbus Blue Jackets",
+    "MIN": "Minnesota Wild",
+    "VGK": "Vegas Golden Knights",
+    "SEA": "Seattle Kraken",
+    "UTA": "Utah Hockey Club",  # change to mammoth if having issues
+}
+
+# Reverse mapping: full team name -> abbreviation
+TEAM_MAP_REVERSE = {name: abbr for abbr, name in TEAM_MAP.items()}
+
 
 # --- OTHER STATIC DATA ---
 NHL_TEAMS = [

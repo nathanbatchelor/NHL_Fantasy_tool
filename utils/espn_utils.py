@@ -10,6 +10,7 @@ def get_team_ids(league):
     return [team.team_id for team in teams]
 
 
+
 def main():
     league = connect()
     team_ids = get_team_ids(league)

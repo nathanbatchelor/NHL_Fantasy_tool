@@ -2,6 +2,25 @@ from sqlmodel import SQLModel, Field, Index
 from typing import Optional
 
 
+class TeamSchedule(SQLModel, table=True):
+    """
+    Stores weekly schedule data for each NHL team.
+    Loaded from your team_schedule.csv file.
+    """
+
+    __tablename__ = "team_schedule"
+
+    id: int = Field(default=None, primary_key=True)
+    team: str = Field(index=True)
+    week: str = Field(index=True)  # e.g., '2025-W45'
+    monday_date: str  # '2025-11-03'
+    sunday_date: str  # '2025-11-09'
+    game_count: int = 0
+    opponents: str  # e.g., "@ DAL, @ VGK, vs WPG"
+
+    __table_args__ = (Index("idx_team_week", "team", "week"),)
+
+
 class PlayerMap(SQLModel, table=True):
     """
     Acts as a 'Rosetta Stone' to map the internal ESPN player ID
@@ -36,7 +55,9 @@ class PlayerGameStats(SQLModel, table=True):
     game_date: str  # ISO format: "2025-11-09"
     season: str = Field(index=True)
     team_abbrev: str  # Player's team
+    team_name: str
     opponent_abbrev: str
+    opponent_name: str
 
     # Player info (useful for querying/display)
     player_name: Optional[str] = None
@@ -64,9 +85,8 @@ class PlayerGameStats(SQLModel, table=True):
         Index("idx_player_date", "player_id", "game_date"),
         Index("idx_game_date", "game_date"),
         Index("idx_team", "team_abbrev"),
-        Index(
-            "idx_player_team", "player_id", "team_abbrev"
-        ),  # New: query players by team
+        Index("idx_team_name", "team_name"),  # New: index on team name
+        Index("idx_player_team", "player_id", "team_abbrev"),
     )
 
 
@@ -83,7 +103,9 @@ class GoalieGameStats(SQLModel, table=True):
     game_date: str
     season: str = Field(index=True)
     team_abbrev: str  # Goalie's team
+    team_name: str  # Goalie's team full name
     opponent_abbrev: str
+    opponent_name: str  # Opponent's team full name
 
     # Player info
     player_name: Optional[str] = None
@@ -107,5 +129,6 @@ class GoalieGameStats(SQLModel, table=True):
         Index("idx_goalie_player_date", "player_id", "game_date"),
         Index("idx_goalie_game_date", "game_date"),
         Index("idx_goalie_team", "team_abbrev"),
+        Index("idx_goalie_team_name", "team_name"),  # New: index on team name
         Index("idx_goalie_player_team", "player_id", "team_abbrev"),
     )

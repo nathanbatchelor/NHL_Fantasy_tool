@@ -188,6 +188,9 @@ def write_stats_to_db(game_cache: dict, boxscore_map: dict):
             for player_id, stats in players.items():
                 opponent_abbrev = get_opponent_abbrev(boxscore, stats.teamAbbrev)
 
+                team_name = constants.TEAM_MAP.get(stats.teamAbbrev)
+                opponent_name = constants.TEAM_MAP.get(opponent_abbrev)
+
                 # Determine if this is a skater or goalie
                 if stats.position in ["G"]:
                     # Goalie - use merge for upsert
@@ -197,7 +200,9 @@ def write_stats_to_db(game_cache: dict, boxscore_map: dict):
                         season=constants.SEASON_ID,
                         game_date=stats.gameDate,
                         team_abbrev=stats.teamAbbrev,
+                        team_name=team_name,
                         opponent_abbrev=opponent_abbrev,
+                        opponent_name=opponent_name,
                         player_name=stats.name,
                         saves=stats.saves or 0,
                         save_pct=stats.savePctg or 0.0,
@@ -230,7 +235,9 @@ def write_stats_to_db(game_cache: dict, boxscore_map: dict):
                         season=constants.SEASON_ID,
                         game_date=stats.gameDate,
                         team_abbrev=stats.teamAbbrev,
+                        team_name=team_name,
                         opponent_abbrev=opponent_abbrev,
+                        opponent_name=opponent_name,
                         player_name=stats.name,
                         goals=stats.goals,
                         assists=stats.assists,
