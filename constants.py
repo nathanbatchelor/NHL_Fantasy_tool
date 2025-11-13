@@ -7,7 +7,7 @@ to ensure consistency across all scripts.
 import os
 
 # --- API & SEASON CONFIG ---
-SEASON_ID = "20242025"
+SEASON_ID = "20252026"
 ALL_PlAYERS_URL = "https://api.nhle.com/stats/rest/en"
 WEB_URL = "https://api-web.nhle.com/v1"
 
@@ -46,12 +46,10 @@ SCHEDULE_CACHE = os.path.join(DATA_DIR, f"nhl_schedule_{SEASON_ID}.json")
 # Cache for player_stats_fetcher (Seeder & Daily Update)
 GAME_STATS_CACHE = os.path.join(DATA_DIR, f"game_stats_cache_{SEASON_ID}.json")
 
-
 # Output CSVs
-SKATER_STATS_CSV = os.path.join(DATA_DIR, f"skater_stats_{SEASON_ID}.csv")
-GOALIE_STATS_CSV = os.path.join(DATA_DIR, f"goalie_stats_{SEASON_ID}.csv")
 WEEKLY_SCHEDULE_CSV = os.path.join(DATA_DIR, "team_weekly_schedule.csv")
 
+AVOID_PLAYER_ESPN_IDS = [5238086]
 
 # --- OTHER STATIC DATA ---
 NHL_TEAMS = [
