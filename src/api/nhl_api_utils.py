@@ -12,7 +12,7 @@ import src.core.constants as constants
 from .models import GamesResponse
 
 # Import other utils
-from src.utils.utils import load_data_from_cache, save_data_to_cache
+from src.utils.cache_utils import load_data_from_cache, save_data_to_cache
 
 # --- Concurrency Settings ---
 CONCURRENCY_LIMIT = 50  # Max concurrent requests

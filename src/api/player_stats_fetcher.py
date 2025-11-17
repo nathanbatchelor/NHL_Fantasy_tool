@@ -27,7 +27,7 @@ from src.api.models import (
 from collections import defaultdict
 from typing import List, Union, cast
 from datetime import datetime
-from src.utils.utils import load_data_from_cache, save_data_to_cache
+from src.utils.cache_utils import load_data_from_cache, save_data_to_cache
 
 
 # --- HELPERS ---
