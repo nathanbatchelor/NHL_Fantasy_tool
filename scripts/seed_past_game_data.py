@@ -10,14 +10,14 @@ It's now a thin wrapper around the core logic in
 
 import asyncio
 import time
-import constants
+import src.core.constants
 import pytz
 from datetime import datetime
-from database import init_db
-from utils.player_stats_fetcher import (
+from src.database.database import init_db
+from src.api.player_stats_fetcher import (
     process_games,
 )  # Import the new core processor
-from utils.nhl_api_utils import get_schedule  # Import the schedule fetcher
+from src.api.nhl_api_utils import get_schedule  # Import the schedule fetcher
 
 
 async def main():

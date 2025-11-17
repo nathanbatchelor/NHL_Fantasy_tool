@@ -15,9 +15,8 @@ Example:
 
 import sys
 import pandas as pd
-from sqlmodel import Session
-from database import engine  # Imports the engine from your database.py
-from utils.date_utils import (
+from src.database.database import engine  # Imports the engine from your database.py
+from src.utils.date_utils import (
     calculate_remaining_week_matchups,
 )  # Imports your schedule function
 import re

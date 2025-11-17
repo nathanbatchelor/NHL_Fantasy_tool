@@ -1,5 +1,41 @@
-from pydantic import BaseModel
 from typing import Optional
+from pydantic import BaseModel
+
+
+class LocalizedName(BaseModel):
+    default: str
+    fr: Optional[str] = None
+
+
+class Team(BaseModel):
+    id: int
+    commonName: LocalizedName
+    placeName: LocalizedName
+    placeNameWithPreposition: Optional[LocalizedName] = None
+    abbrev: str
+    logo: str
+    darkLogo: Optional[str] = None
+    awaySplitSquad: Optional[bool] = False
+    score: Optional[int] = None
+
+
+class Game(BaseModel):
+    id: int
+    season: int
+    gameType: int
+    gameDate: str
+    startTimeUTC: str
+    easternUTCOffset: str
+    venueUTCOffset: str
+    venueTimezone: str
+    gameState: str
+    gameScheduleState: str
+    awayTeam: Team
+    homeTeam: Team
+
+
+class GamesResponse(BaseModel):
+    games: list[Game]
 
 
 # --- Models for Boxscore (has everything except PP/SH points) ---
@@ -23,6 +59,7 @@ class PlayerStatsFromBoxscore(BaseModel):
     sog: int = 0  # shots on goal
     blockedShots: int = 0
     hits: int = 0
+    sweaterNumber: Optional[int] = None
 
 
 class GoalieStatsFromBoxscore(BaseModel):
@@ -35,6 +72,7 @@ class GoalieStatsFromBoxscore(BaseModel):
     savePctg: float = 0
     goalsAgainst: int = 0
     decision: Optional[str] = None  # "W", "L", or None
+    sweaterNumber: Optional[int] = None
 
 
 class TeamStatsFromBoxscore(BaseModel):
@@ -113,6 +151,7 @@ class FinalPlayerGameStats(BaseModel):
     sog: int = 0
     blockedShots: int = 0
     hits: int = 0
+    sweaterNumber: Optional[int] = None
 
     # From GoalieStatsFromBoxscore (Phase 2)
     saves: Optional[int] = None

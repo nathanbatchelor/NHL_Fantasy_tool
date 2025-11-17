@@ -36,6 +36,14 @@ GOALIE_FPTS_WEIGHTS = {
     "otLosses": 1,
 }
 
+NHL_TO_ESPN_POSITION_MAP = {
+    "C": "Center",
+    "L": "Left Wing",
+    "R": "Right Wing",
+    "D": "Defense",
+    "G": "Goalie",
+}
+
 # --- DATA FILEPATHS ---
 DATA_DIR = "data"
 
@@ -47,8 +55,6 @@ GAME_STATS_CACHE = os.path.join(DATA_DIR, f"game_stats_cache_{SEASON_ID}.json")
 
 # Output CSVs
 WEEKLY_SCHEDULE_CSV = os.path.join(DATA_DIR, "team_weekly_schedule.csv")
-
-AVOID_PLAYER_ESPN_IDS = [5238086]
 
 TEAM_MAP = {
     "BOS": "Boston Bruins",

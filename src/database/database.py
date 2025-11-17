@@ -2,11 +2,11 @@
 This is the central file for all database models and connection logic.
 """
 
-import constants  # Assuming you store your DB path in constants
+import src.core.constants as constants  # Assuming you store your DB path in constants
 from pathlib import Path
 
 from sqlmodel import SQLModel, create_engine
-from models.database import PlayerGameStats, GoalieGameStats, PlayerMap, TeamSchedule
+from src.database.models import PlayerGameStats, GoalieGameStats, PlayerMap, TeamSchedule
 
 
 # --- Database Setup ---

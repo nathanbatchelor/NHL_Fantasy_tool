@@ -9,8 +9,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from pydantic import ValidationError
 
-import constants
-from models.api.schedule import GamesResponse
+import src.core.constants as constants
+from .models import GamesResponse
 
 # Import other utils
 from utils.utils import load_data_from_cache, save_data_to_cache
@@ -18,8 +18,6 @@ from utils.retry_utils import safe_get
 
 
 # --- Schedule Fetching ---
-
-
 def fetch_team_schedule(team_abbv: str) -> dict:
     """Fetch schedule for a single team"""
     team_schedule_url = (
@@ -79,7 +77,3 @@ def get_schedule(force_refresh: bool = False) -> dict:
     )
     save_data_to_cache(unique_games, constants.SCHEDULE_CACHE)
     return unique_games
-
-
-# --- All other functions (like get_player_game_log_data, fetch_and_parse_game_data)
-# --- have been removed as they are now handled by utils/player_stats_fetcher.py

@@ -2,10 +2,10 @@
 
 import pytz
 from datetime import datetime, timedelta
-import constants
+from src.core.constants import FANTASY_TIMEZONE, NHL_TEAMS
 
 # --- Import the new logic function ---
-from utils.date_utils import calculate_remaining_week_matchups
+from src.utils.date_utils import calculate_remaining_week_matchups
 
 
 def print_remaining_matchups():
@@ -17,7 +17,7 @@ def print_remaining_matchups():
     print("=" * 60)
 
     # 1. Get today's date info for the printout
-    tz = pytz.timezone(constants.FANTASY_TIMEZONE)
+    tz = pytz.timezone(FANTASY_TIMEZONE)
     today = datetime.now(tz)
     today_weekday_iso = today.isoweekday()
     start_of_week = today - timedelta(days=today_weekday_iso - 1)
@@ -33,7 +33,7 @@ def print_remaining_matchups():
 
     # 3. Print the results
     print("--- Remaining Matchups ---")
-    for team in constants.NHL_TEAMS:
+    for team in NHL_TEAMS:
         if team in matchups:
             game_count = len(matchups[team])
             opponents_str = ", ".join(matchups[team])

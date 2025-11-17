@@ -7,14 +7,17 @@ and caching all player game stats.
 Both the seeder and the daily updater use this module.
 """
 
-import constants
+import src.core.constants as constants
 import time
 import asyncio
 import httpx
 from sqlmodel import Session
-from database import engine
-from models.database import PlayerGameStats, GoalieGameStats
-from models.api.stats import (
+from src.database.database import engine
+from src.database.models import PlayerGameStats, GoalieGameStats
+
+# --- NEW IMPORT ---
+from src.database.utils import bulk_merge_data
+from src.api.models import (  # Corrected import path
     PlayerGameLogResponse,
     GameBoxscoreResponse,
     PlayerStatsFromBoxscore,
@@ -24,7 +27,7 @@ from models.api.stats import (
 from collections import defaultdict
 from typing import List, Union, cast
 from datetime import datetime
-from utils.utils import load_data_from_cache, save_data_to_cache
+from src.utils.utils import load_data_from_cache, save_data_to_cache
 
 
 # --- HELPERS ---
@@ -103,6 +106,7 @@ def merge_skater_stats(entry: FinalPlayerGameStats, stats: PlayerStatsFromBoxsco
     entry.sog = stats.sog
     entry.blockedShots = stats.blockedShots
     entry.hits = stats.hits
+    entry.sweaterNumber = stats.sweaterNumber
 
 
 def merge_goalie_stats(entry: FinalPlayerGameStats, stats: GoalieStatsFromBoxscore):
@@ -113,6 +117,7 @@ def merge_goalie_stats(entry: FinalPlayerGameStats, stats: GoalieStatsFromBoxsco
     entry.savePctg = stats.savePctg
     entry.goalsAgainst = stats.goalsAgainst
     entry.decision = stats.decision
+    entry.sweaterNumber = stats.sweaterNumber
 
 
 def calculate_fantasy_points_skater(stats: FinalPlayerGameStats) -> float:
@@ -162,105 +167,113 @@ def get_opponent_abbrev(boxscore: GameBoxscoreResponse, team_abbrev: str) -> str
         return boxscore.homeTeam.abbrev
 
 
-# --- Database Writer ---
+# --- Database Writer (MODIFIED) ---
 
 
 def write_stats_to_db(game_cache: dict, boxscore_map: dict):
     """
     PHASE 5: Write all collected stats to the database.
-    Uses merge to handle upserts (insert or update).
+    Uses a bulk merge for efficiency.
     """
     print("\n--- Phase 5: Writing to database...")
 
-    skater_count = 0
-    goalie_count = 0
+    skater_records_to_merge = []
+    goalie_records_to_merge = []
 
-    with Session(engine) as session:
-        for game_id, players in game_cache.items():
-            # Get the boxscore to determine opponent
-            boxscore = boxscore_map.get(game_id)
-            if not boxscore:
-                print(
-                    f"Warning: No boxscore found for game {game_id}. Skipping DB write for this game."
+    for game_id, players in game_cache.items():
+        # Get the boxscore to determine opponent
+        boxscore = boxscore_map.get(game_id)
+        if not boxscore:
+            print(
+                f"Warning: No boxscore found for game {game_id}. Skipping DB write for this game."
+            )
+            continue
+
+        for player_id, stats in players.items():
+            opponent_abbrev = get_opponent_abbrev(boxscore, stats.teamAbbrev)
+
+            team_name = constants.TEAM_MAP.get(stats.teamAbbrev)
+            opponent_name = constants.TEAM_MAP.get(opponent_abbrev)
+
+            # Determine if this is a skater or goalie
+            if stats.position in ["G"]:
+                # Goalie
+                goalie_record = GoalieGameStats(
+                    game_id=stats.gameId,
+                    player_id=stats.playerId,
+                    season=constants.SEASON_ID,
+                    game_date=stats.gameDate,
+                    team_abbrev=stats.teamAbbrev,
+                    team_name=team_name,
+                    opponent_abbrev=opponent_abbrev,
+                    opponent_name=opponent_name,
+                    player_name=stats.name,
+                    jersey_number=stats.sweaterNumber,
+                    position="Goalie",  # Use the simplified position
+                    saves=stats.saves or 0,
+                    save_pct=stats.savePctg or 0.0,
+                    goals_against=stats.goalsAgainst or 0,
+                    decision=stats.decision,
+                    wins=1 if stats.decision == "W" else 0,
+                    shutouts=(
+                        1
+                        if (stats.goalsAgainst == 0 and stats.saves and stats.saves > 0)
+                        else 0
+                    ),
+                    ot_losses=1 if stats.decision == "O" else 0,
+                    total_fpts=calculate_fantasy_points_goalie(stats),
                 )
-                continue
+                goalie_records_to_merge.append(goalie_record)
+            else:
+                # Skater
+                shooting_pct = None
+                if stats.sog > 0:
+                    shooting_pct = stats.goals / stats.sog
 
-            for player_id, stats in players.items():
-                opponent_abbrev = get_opponent_abbrev(boxscore, stats.teamAbbrev)
+                position_name = constants.NHL_TO_ESPN_POSITION_MAP.get(
+                    stats.position, stats.position
+                )
 
-                team_name = constants.TEAM_MAP.get(stats.teamAbbrev)
-                opponent_name = constants.TEAM_MAP.get(opponent_abbrev)
+                skater_record = PlayerGameStats(
+                    game_id=stats.gameId,
+                    player_id=stats.playerId,
+                    season=constants.SEASON_ID,
+                    game_date=stats.gameDate,
+                    team_abbrev=stats.teamAbbrev,
+                    team_name=team_name,
+                    opponent_abbrev=opponent_abbrev,
+                    opponent_name=opponent_name,
+                    player_name=stats.name,
+                    jersey_number=stats.sweaterNumber,
+                    position=position_name,
+                    goals=stats.goals,
+                    assists=stats.assists,
+                    pp_points=float(stats.powerPlayPoints),
+                    sh_points=float(stats.shorthandedPoints),
+                    shots=stats.sog,
+                    shooting_pct=shooting_pct,
+                    blocked_shots=stats.blockedShots,
+                    hits=stats.hits,
+                    total_fpts=calculate_fantasy_points_skater(stats),
+                    toi_seconds=toi_to_seconds(stats.toi),
+                    shifts=stats.shifts,
+                )
+                skater_records_to_merge.append(skater_record)
 
-                # Determine if this is a skater or goalie
-                if stats.position in ["G"]:
-                    # Goalie - use merge for upsert
-                    goalie_record = GoalieGameStats(
-                        game_id=stats.gameId,
-                        player_id=stats.playerId,
-                        season=constants.SEASON_ID,
-                        game_date=stats.gameDate,
-                        team_abbrev=stats.teamAbbrev,
-                        team_name=team_name,
-                        opponent_abbrev=opponent_abbrev,
-                        opponent_name=opponent_name,
-                        player_name=stats.name,
-                        saves=stats.saves or 0,
-                        save_pct=stats.savePctg or 0.0,
-                        goals_against=stats.goalsAgainst or 0,
-                        decision=stats.decision,
-                        wins=1 if stats.decision == "W" else 0,
-                        shutouts=(
-                            1
-                            if (
-                                stats.goalsAgainst == 0
-                                and stats.saves
-                                and stats.saves > 0
-                            )
-                            else 0
-                        ),
-                        ot_losses=1 if stats.decision == "O" else 0,
-                        total_fpts=calculate_fantasy_points_goalie(stats),
-                    )
-                    session.merge(goalie_record)
-                    goalie_count += 1
-                else:
-                    # Skater - use merge for upsert
-                    shooting_pct = None
-                    if stats.sog > 0:
-                        shooting_pct = stats.goals / stats.sog
-
-                    skater_record = PlayerGameStats(
-                        game_id=stats.gameId,
-                        player_id=stats.playerId,
-                        season=constants.SEASON_ID,
-                        game_date=stats.gameDate,
-                        team_abbrev=stats.teamAbbrev,
-                        team_name=team_name,
-                        opponent_abbrev=opponent_abbrev,
-                        opponent_name=opponent_name,
-                        player_name=stats.name,
-                        goals=stats.goals,
-                        assists=stats.assists,
-                        pp_points=float(stats.powerPlayPoints),
-                        sh_points=float(stats.shorthandedPoints),
-                        shots=stats.sog,
-                        shooting_pct=shooting_pct,
-                        blocked_shots=stats.blockedShots,
-                        hits=stats.hits,
-                        total_fpts=calculate_fantasy_points_skater(stats),
-                        toi_seconds=toi_to_seconds(stats.toi),
-                        shifts=stats.shifts,
-                    )
-                    session.merge(skater_record)
-                    skater_count += 1
+    # --- NEW: Use bulk_merge_data ---
+    with Session(engine) as session:
+        bulk_merge_data(session, skater_records_to_merge)
+        bulk_merge_data(session, goalie_records_to_merge)
 
         # Commit all changes at once
-        print(f"Committing {skater_count} skater and {goalie_count} goalie records...")
+        print(
+            f"Committing {len(skater_records_to_merge)} skater and {len(goalie_records_to_merge)} goalie records..."
+        )
         session.commit()
 
     print(f"✅ Database write complete!")
-    print(f"  - Skaters: {skater_count} records")
-    print(f"  - Goalies: {goalie_count} records")
+    print(f"  - Skaters: {len(skater_records_to_merge)} records")
+    print(f"  - Goalies: {len(goalie_records_to_merge)} records")
 
 
 # --- Main Orchestrator ---
@@ -456,13 +469,14 @@ async def process_games(game_ids_to_process: List[int], use_cache: bool):
 
         # Convert Pydantic models to dicts for JSON serialization
         players_dict = {
-            pid: stats.dict() for pid, stats in game_cache_internal[game_id].items()
+            pid: stats.model_dump()
+            for pid, stats in game_cache_internal[game_id].items()
         }
 
         game_stats_cache_on_disk[str(game_id)] = {
             "cached_at": datetime.utcnow().isoformat() + "Z",
             "status": status,
-            "boxscore_raw": boxscore.dict(),
+            "boxscore_raw": boxscore.model_dump(),
             "players": players_dict,
         }
         updated_count += 1

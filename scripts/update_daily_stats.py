@@ -8,17 +8,17 @@ It's now a thin wrapper around the core logic in
 `utils.player_stats_fetcher`.
 """
 
-import constants
+import src.core.constants as constants
 import pytz
 import time
 import asyncio
 from datetime import datetime, timedelta
-from database import init_db
-from utils.player_stats_fetcher import (
+from src.database.database import init_db
+from src.api.player_stats_fetcher import (
     process_games,
 )  # Import the new core processor
-from utils.nhl_api_utils import get_schedule
-from utils.date_utils import get_schedule_by_date
+from src.api.nhl_api_utils import get_schedule
+from src.utils.date_utils import get_schedule_by_date
 
 
 async def main():

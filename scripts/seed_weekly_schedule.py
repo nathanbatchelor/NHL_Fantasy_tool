@@ -7,19 +7,46 @@ Controller script to analyze the full schedule and create the
 import sys
 import csv
 from pathlib import Path
-import constants
+from src.core.constants import WEEKLY_SCHEDULE_CSV, FANTASY_TIMEZONE
 
 # Import from the new utility files
-from utils.date_utils import get_week_dates
-from utils.transforms import count_games_per_team_per_week
-from utils.nhl_api_utils import get_schedule
+from src.utils.date_utils import get_week_dates, get_fantasy_week
+from src.api.nhl_api_utils import get_schedule
+
+from collections import defaultdict
+
+
+def count_games_per_team_per_week(schedule: dict) -> dict:
+    """
+    Count games per team per fantasy week and track opponents
+    """
+    team_week_data = defaultdict(
+        lambda: defaultdict(lambda: {"count": 0, "opponents": [], "games": []})
+    )
+
+    for game_id, game_data in schedule.items():
+        year, week = get_fantasy_week(game_data["date"])
+        week_key = f"{year}-W{week:02d}"
+
+        home_team = game_data["home_abbrev"]
+        away_team = game_data["away_abbrev"]
+
+        # Track for home team
+        team_week_data[home_team][week_key]["count"] += 1
+        team_week_data[home_team][week_key]["opponents"].append(f"vs {away_team}")
+
+        # Track for away team
+        team_week_data[away_team][week_key]["count"] += 1
+        team_week_data[away_team][week_key]["opponents"].append(f"@ {home_team}")
+
+    return {team: dict(weeks) for team, weeks in team_week_data.items()}
 
 
 def export_to_csv(team_week_data: dict):
     """
     Export to CSV for easy viewing.
     """
-    filepath = constants.WEEKLY_SCHEDULE_CSV
+    filepath = WEEKLY_SCHEDULE_CSV
     Path(filepath).parent.mkdir(parents=True, exist_ok=True)
 
     with open(filepath, "w", newline="") as f:
@@ -52,7 +79,7 @@ if __name__ == "__main__":
 
     # 2. Analyze the data
     print(
-        f"\nCalculating games per team per fantasy week (Mon-Sun in {constants.FANTASY_TIMEZONE})..."
+        f"\nCalculating games per team per fantasy week (Mon-Sun in {FANTASY_TIMEZONE})..."
     )
     team_week_data = count_games_per_team_per_week(schedule)
 
