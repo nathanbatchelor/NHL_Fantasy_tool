@@ -6,9 +6,10 @@ from src.core.constants import FANTASY_TIMEZONE, NHL_TEAMS
 
 # --- Import the new logic function ---
 from src.utils.date_utils import calculate_remaining_week_matchups
+import asyncio
 
 
-def print_remaining_matchups():
+async def print_remaining_matchups():
     """
     Fetches and prints remaining games for the current fantasy week.
     """
@@ -29,7 +30,7 @@ def print_remaining_matchups():
     print(f"Today's Date: {today.strftime('%Y-%m-%d')}\n")
 
     # 2. Call the reusable logic function
-    matchups = calculate_remaining_week_matchups()
+    matchups = await calculate_remaining_week_matchups()
 
     # 3. Print the results
     print("--- Remaining Matchups ---")
@@ -43,4 +44,4 @@ def print_remaining_matchups():
 
 
 if __name__ == "__main__":
-    print_remaining_matchups()
+    asyncio.run(print_remaining_matchups())
