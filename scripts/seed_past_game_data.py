@@ -10,7 +10,7 @@ It's now a thin wrapper around the core logic in
 
 import asyncio
 import time
-import src.core.constants
+from src.core.constants import FANTASY_TIMEZONE, DATABASE_FILE, SEASON_ID
 import pytz
 from datetime import datetime
 from src.database.database import init_db
@@ -34,14 +34,14 @@ async def main():
 
     # --- Get Today's Date ---
     # We use this to filter out future games
-    tz = pytz.timezone(constants.FANTASY_TIMEZONE)
+    tz = pytz.timezone(FANTASY_TIMEZONE)
     today_local_date = datetime.now(tz).date()
-    print(f"Today's date ({constants.FANTASY_TIMEZONE}): {today_local_date}")
+    print(f"Today's date ({FANTASY_TIMEZONE}): {today_local_date}")
 
     # --- Get all game IDs for the season ---
     print("Fetching full season schedule to get all game IDs...")
     # We force_refresh=True here to ensure we get *all* games
-    schedule_by_id = get_schedule(force_refresh=True)
+    schedule_by_id = await get_schedule(force_refresh=True)
     if not schedule_by_id:
         print("Error: No schedule data returned. Exiting.")
         return
@@ -69,7 +69,7 @@ async def main():
                 f"Warning: Could not parse date for game {game_id_str}. Skipping. Error: {e}"
             )
 
-    print(f"Found {total_game_count} total games for season {constants.SEASON_ID}.")
+    print(f"Found {total_game_count} total games for season {SEASON_ID}.")
     print(f"  - {len(past_game_ids)} games are in the past (will be processed).")
     print(
         f"  - {future_game_count} games are today or in the future (will be skipped)."
@@ -92,7 +92,7 @@ async def main():
     print(f"Total games processed: {len(past_game_ids)}")
     print(f"Total execution time: {elapsed:.2f} seconds")
     print(
-        f"Database location: {constants.DATABASE_FILE if hasattr(constants, 'DATABASE_FILE') else 'data/nhl_stats.db'}"
+        f"Database location: {DATABASE_FILE if DATABASE_FILE else 'data/nhl_stats.db'}"
     )
 
 

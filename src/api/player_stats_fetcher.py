@@ -1,23 +1,22 @@
-"""
-utils/player_stats_fetcher.py
-
-This is the new shared core module for fetching, processing,
-and caching all player game stats.
-
-Both the seeder and the daily updater use this module.
-"""
-
-import src.core.constants as constants
 import time
 import asyncio
 import httpx
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type,
+)
+
+from typing import DefaultDict, Dict, List, Any, Union, Optional, Tuple
+
+import src.core.constants as constants
 from sqlmodel import Session
 from src.database.database import engine
 from src.database.models import PlayerGameStats, GoalieGameStats
 
-# --- NEW IMPORT ---
 from src.database.utils import bulk_merge_data
-from src.api.models import (  
+from src.api.models import (
     PlayerGameLogResponse,
     GameBoxscoreResponse,
     PlayerStatsFromBoxscore,
@@ -39,22 +38,27 @@ def toi_to_seconds(toi_str: str) -> int:
         return 0
 
 
-# --- Concurrency Settings ---
-CONCURRENCY_LIMIT = 50  # Max concurrent requests
-
 # --- Async Fetch Functions ---
 
 
-async def fetch_player_log(client, semaphore, player_id):
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    retry=retry_if_exception_type(httpx.HTTPError),
+)
+async def fetch_player_log(
+    client: httpx.AsyncClient, semaphore: asyncio.Semaphore, player_id: int
+) -> Optional[Tuple[int, PlayerGameLogResponse]]:
     """
-    Fetches one player's *entire* season game log.
-    This is efficient as it's one call per player, and we
-    can find all games they played in.
+    Fetches one player's entire season game log.
+
+    Returns:
+        Tuple of (player_id, log_response) or None if fetch fails
     """
     url = f"{constants.WEB_URL}/player/{player_id}/game-log/{constants.SEASON_ID}/2"
     async with semaphore:
         try:
-            res = await client.get(url, timeout=10.0)
+            res = await client.get(url, timeout=constants.API_TIMEOUT)
             res.raise_for_status()
             data = res.json()
             if not data:
@@ -69,15 +73,25 @@ async def fetch_player_log(client, semaphore, player_id):
             return None
 
 
-async def fetch_game_boxscore(client, semaphore, game_id):
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    retry=retry_if_exception_type(httpx.HTTPError),
+)
+async def fetch_game_boxscore(
+    client: httpx.AsyncClient, semaphore: asyncio.Semaphore, game_id: int
+) -> Optional[GameBoxscoreResponse]:
     """
     Fetches the full boxscore for a single game.
+
+    Returns:
+        GameBoxscoreResponse or None if fetch fails
     """
     url = f"{constants.WEB_URL}/gamecenter/{game_id}/boxscore"
 
     async with semaphore:
         try:
-            res = await client.get(url, timeout=10.0)
+            res = await client.get(url, timeout=constants.API_TIMEOUT)
             res.raise_for_status()
             data = res.json()
             if not data:
@@ -141,8 +155,8 @@ def calculate_fantasy_points_goalie(stats: FinalPlayerGameStats) -> float:
     weights = constants.GOALIE_FPTS_WEIGHTS
 
     # Determine decision outcomes
-    wins = 1 if stats.decision == "W" else 0
-    ot_losses = 1 if stats.decision == "O" else 0
+    wins = 1 if stats.decision == constants.WIN_DECISION else 0
+    ot_losses = 1 if stats.decision == constants.OT_LOSS_DECISION else 0
     shutouts = (
         1
         if (stats.goalsAgainst == 0 and stats.saves is not None and stats.saves > 0)
@@ -196,7 +210,7 @@ def write_stats_to_db(game_cache: dict, boxscore_map: dict):
             opponent_name = constants.TEAM_MAP.get(opponent_abbrev)
 
             # Determine if this is a skater or goalie
-            if stats.position in ["G"]:
+            if stats.position in constants.GOALIE_POSITIONS:
                 # Goalie
                 goalie_record = GoalieGameStats(
                     game_id=stats.gameId,
@@ -230,10 +244,6 @@ def write_stats_to_db(game_cache: dict, boxscore_map: dict):
                 if stats.sog > 0:
                     shooting_pct = stats.goals / stats.sog
 
-                position_name = constants.NHL_TO_ESPN_POSITION_MAP.get(
-                    stats.position, stats.position
-                )
-
                 skater_record = PlayerGameStats(
                     game_id=stats.gameId,
                     player_id=stats.playerId,
@@ -245,7 +255,7 @@ def write_stats_to_db(game_cache: dict, boxscore_map: dict):
                     opponent_name=opponent_name,
                     player_name=stats.name,
                     jersey_number=stats.sweaterNumber,
-                    position=position_name,
+                    position=stats.position,
                     goals=stats.goals,
                     assists=stats.assists,
                     pp_points=float(stats.powerPlayPoints),
@@ -261,19 +271,30 @@ def write_stats_to_db(game_cache: dict, boxscore_map: dict):
                 skater_records_to_merge.append(skater_record)
 
     # --- NEW: Use bulk_merge_data ---
+    # --- Use bulk_merge_data with error handling ---
     with Session(engine) as session:
-        bulk_merge_data(session, skater_records_to_merge)
-        bulk_merge_data(session, goalie_records_to_merge)
+        try:
+            skater_merged = bulk_merge_data(session, skater_records_to_merge)
+            goalie_merged = bulk_merge_data(session, goalie_records_to_merge)
 
-        # Commit all changes at once
-        print(
-            f"Committing {len(skater_records_to_merge)} skater and {len(goalie_records_to_merge)} goalie records..."
-        )
-        session.commit()
+            # Commit all changes at once
+            print(
+                f"Committing {skater_merged} skater and {goalie_merged} goalie records..."
+            )
+            session.commit()
 
-    print(f"✅ Database write complete!")
-    print(f"  - Skaters: {len(skater_records_to_merge)} records")
-    print(f"  - Goalies: {len(goalie_records_to_merge)} records")
+            print(f"✅ Database write complete!")
+            print(
+                f"  - Skaters: {skater_merged}/{len(skater_records_to_merge)} records"
+            )
+            print(
+                f"  - Goalies: {goalie_merged}/{len(goalie_records_to_merge)} records"
+            )
+
+        except Exception as e:
+            print(f"❌ Database commit failed: {e}")
+            session.rollback()
+            raise  # Re-raise so the calling script knows something went wrong
 
 
 # --- Main Orchestrator ---
@@ -291,17 +312,20 @@ async def process_games(game_ids_to_process: List[int], use_cache: bool):
     start_time = time.perf_counter()
     print(f"Processing {len(game_ids_to_process)} games. Cache enabled: {use_cache}")
 
-    # In-memory cache for this run
-    # game_cache_internal: { game_id: { player_id: FinalPlayerGameStats } }
-    game_cache_internal = defaultdict(dict)
-    # boxscore_map: { game_id: GameBoxscoreResponse }
-    boxscore_map = {}
+    # In-memory cache for this run - with proper types
+    game_cache_internal: DefaultDict[int, Dict[int, FinalPlayerGameStats]] = (
+        defaultdict(dict)
+    )
+    boxscore_map: Dict[int, GameBoxscoreResponse] = {}
 
-    # Load the on-disk cache
-    game_stats_cache_on_disk = load_data_from_cache(constants.GAME_STATS_CACHE) or {}
+    # Load the on-disk cache with type checking
+    cache_result = load_data_from_cache(constants.GAME_STATS_CACHE)
+    game_stats_cache_on_disk: Dict[str, Any] = (
+        cache_result if isinstance(cache_result, dict) else {}
+    )
 
-    game_ids_to_fetch_fresh = []
-    game_ids_from_cache = []
+    game_ids_to_fetch_fresh: List[int] = []
+    game_ids_from_cache: List[int] = []
 
     if use_cache:
         for game_id in game_ids_to_process:
@@ -320,7 +344,10 @@ async def process_games(game_ids_to_process: List[int], use_cache: bool):
 
     # --- Load Cached Games ---
     for game_id in game_ids_from_cache:
-        cached_data = game_stats_cache_on_disk[str(game_id)]
+        cached_data = game_stats_cache_on_disk.get(str(game_id))
+        if not cached_data:
+            continue
+
         try:
             # Re-construct the Pydantic models from the cached dicts
             boxscore_map[game_id] = GameBoxscoreResponse(**cached_data["boxscore_raw"])
@@ -337,10 +364,9 @@ async def process_games(game_ids_to_process: List[int], use_cache: bool):
 
     # --- Fetch Fresh Games ---
     if game_ids_to_fetch_fresh:
-        semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
+        semaphore = asyncio.Semaphore(constants.CONCURRENCY_LIMIT)
         async with httpx.AsyncClient() as client:
             # --- PHASE 1: Fetch boxscores ---
-            # We fetch boxscores first to find out which players played
             print(
                 f"\n--- Phase 1: Fetching {len(game_ids_to_fetch_fresh)} boxscores..."
             )
@@ -348,26 +374,37 @@ async def process_games(game_ids_to_process: List[int], use_cache: bool):
                 fetch_game_boxscore(client, semaphore, game_id)
                 for game_id in game_ids_to_fetch_fresh
             ]
-            boxscore_results = await asyncio.gather(*boxscore_tasks)
+            boxscore_results = await asyncio.gather(
+                *boxscore_tasks, return_exceptions=True
+            )
 
-            player_ids_to_fetch_log = set()
-            for boxscore in boxscore_results:
-                if boxscore is None:
+            # Filter out failed requests and process successful ones
+            player_ids_to_fetch_log: set[int] = set()
+
+            for i, result in enumerate(boxscore_results):
+                if isinstance(result, Exception):
+                    game_id = game_ids_to_fetch_fresh[i]
+                    print(
+                        f"Warning: Failed to fetch boxscore for game {game_id}: {result}"
+                    )
+                    continue
+                if result is None:
                     continue
 
-                # Add to our in-memory map
-                boxscore_map[boxscore.id] = boxscore
+                # Type assertion - we know result is GameBoxscoreResponse here
+                assert isinstance(result, GameBoxscoreResponse)
+                boxscore_map[result.id] = result
 
                 # Get all players from the game
                 all_players: List[
                     Union[PlayerStatsFromBoxscore, GoalieStatsFromBoxscore]
                 ] = []
-                all_players.extend(boxscore.playerByGameStats.awayTeam.forwards)
-                all_players.extend(boxscore.playerByGameStats.awayTeam.defense)
-                all_players.extend(boxscore.playerByGameStats.awayTeam.goalies)
-                all_players.extend(boxscore.playerByGameStats.homeTeam.forwards)
-                all_players.extend(boxscore.playerByGameStats.homeTeam.defense)
-                all_players.extend(boxscore.playerByGameStats.homeTeam.goalies)
+                all_players.extend(result.playerByGameStats.awayTeam.forwards)
+                all_players.extend(result.playerByGameStats.awayTeam.defense)
+                all_players.extend(result.playerByGameStats.awayTeam.goalies)
+                all_players.extend(result.playerByGameStats.homeTeam.forwards)
+                all_players.extend(result.playerByGameStats.homeTeam.defense)
+                all_players.extend(result.playerByGameStats.homeTeam.goalies)
 
                 for player_stats in all_players:
                     player_ids_to_fetch_log.add(player_stats.playerId)
@@ -378,7 +415,6 @@ async def process_games(game_ids_to_process: List[int], use_cache: bool):
             )
 
             # --- PHASE 2: Fetch player logs ---
-            # Now fetch the logs for all players we found
             print(
                 f"\n--- Phase 2: Fetching logs for {len(player_ids_to_fetch_log)} players..."
             )
@@ -386,14 +422,23 @@ async def process_games(game_ids_to_process: List[int], use_cache: bool):
                 fetch_player_log(client, semaphore, player_id)
                 for player_id in player_ids_to_fetch_log
             ]
-            player_log_results = await asyncio.gather(*player_log_tasks)
+            player_log_results = await asyncio.gather(
+                *player_log_tasks, return_exceptions=True
+            )
 
             # Populate the in-memory cache with partial data from logs
-            for result in player_log_results:
-                if result is None:
+            for log_result in player_log_results:
+                if isinstance(log_result, Exception):
+                    print(f"Warning: Failed to process player log: {log_result}")
+                    continue
+                if log_result is None:
                     continue
 
-                player_id, log_response = result
+                # Type assertion - we know log_result is a tuple here
+                assert isinstance(log_result, tuple) and len(log_result) == 2
+                player_id: int = log_result[0]
+                log_response: PlayerGameLogResponse = log_result[1]
+
                 for game in log_response.gameLog:
                     # Only add data for the games we are processing
                     if game.gameId in game_ids_to_fetch_fresh:
@@ -416,26 +461,26 @@ async def process_games(game_ids_to_process: List[int], use_cache: bool):
             )
 
             # --- PHASE 3: Merge boxscore data ---
-            # Now, merge the boxscore data into the partially-filled cache
             print("\n--- Phase 3: Merging boxscore data...")
             merge_count = 0
             for game_id in game_ids_to_fetch_fresh:
                 boxscore = boxscore_map.get(game_id)
                 if not boxscore:
-                    # print(f"Warning: No boxscore data for {game_id}, skipping merge.")
                     continue
 
-                all_players: List[
+                assert isinstance(boxscore, GameBoxscoreResponse)
+
+                all_players_phase3: List[
                     Union[PlayerStatsFromBoxscore, GoalieStatsFromBoxscore]
                 ] = []
-                all_players.extend(boxscore.playerByGameStats.awayTeam.forwards)
-                all_players.extend(boxscore.playerByGameStats.awayTeam.defense)
-                all_players.extend(boxscore.playerByGameStats.awayTeam.goalies)
-                all_players.extend(boxscore.playerByGameStats.homeTeam.forwards)
-                all_players.extend(boxscore.playerByGameStats.homeTeam.defense)
-                all_players.extend(boxscore.playerByGameStats.homeTeam.goalies)
+                all_players_phase3.extend(boxscore.playerByGameStats.awayTeam.forwards)
+                all_players_phase3.extend(boxscore.playerByGameStats.awayTeam.defense)
+                all_players_phase3.extend(boxscore.playerByGameStats.awayTeam.goalies)
+                all_players_phase3.extend(boxscore.playerByGameStats.homeTeam.forwards)
+                all_players_phase3.extend(boxscore.playerByGameStats.homeTeam.defense)
+                all_players_phase3.extend(boxscore.playerByGameStats.homeTeam.goalies)
 
-                for player_stats in all_players:
+                for player_stats in all_players_phase3:
                     player_id = player_stats.playerId
                     # Check if this player is in our cache (i.e., we got log data)
                     if player_id in game_cache_internal[game_id]:
@@ -454,7 +499,6 @@ async def process_games(game_ids_to_process: List[int], use_cache: bool):
             )
 
     # --- PHASE 4: Update Cache on Disk ---
-    # (Outside the async block)
     print("\n--- Phase 4: Updating on-disk cache...")
     updated_count = 0
     for game_id in game_ids_to_fetch_fresh:
@@ -462,14 +506,13 @@ async def process_games(game_ids_to_process: List[int], use_cache: bool):
         if not boxscore:
             continue
 
-        # We assume any game we processed is 'final'.
-        # A more complex check could use `boxscore.gameState` if it were available
-        # in the boxscore model, but for daily updates this is safe.
+        assert isinstance(boxscore, GameBoxscoreResponse)
+
         status = "final"
 
         # Convert Pydantic models to dicts for JSON serialization
         players_dict = {
-            pid: stats.model_dump()
+            str(pid): stats.model_dump()
             for pid, stats in game_cache_internal[game_id].items()
         }
 
@@ -488,5 +531,4 @@ async def process_games(game_ids_to_process: List[int], use_cache: bool):
         print("  - On-disk cache is already up-to-date.")
 
     # --- PHASE 5: Write all data (cached + fresh) to DB ---
-    # This ensures the DB is fully in sync, even with cached games
     write_stats_to_db(game_cache_internal, boxscore_map)

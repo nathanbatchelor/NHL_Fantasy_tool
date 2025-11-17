@@ -6,7 +6,7 @@ import src.core.constants as constants  # Assuming you store your DB path in con
 from pathlib import Path
 
 from sqlmodel import SQLModel, create_engine
-from src.database.models import PlayerGameStats, GoalieGameStats, PlayerMap, TeamSchedule
+from .models import *
 
 
 # --- Database Setup ---

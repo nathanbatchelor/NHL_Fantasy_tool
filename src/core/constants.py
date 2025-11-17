@@ -5,15 +5,23 @@ to ensure consistency across all scripts.
 """
 
 import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # --- API & SEASON CONFIG ---
-SEASON_ID = "20252026"
+SEASON_ID = os.getenv("SEASON_ID", "20252026")
 WEB_URL = "https://api-web.nhle.com/v1"
 
-DATABASE_FILE = "data/nhl_stats.db"
+DATABASE_FILE = os.getenv("DATABASE_FILE", "data/nhl_stats.db")
 
 # --- FANTASY LEAGUE CONFIG ---
-FANTASY_TIMEZONE = "US/Eastern"  # Options: "US/Eastern", "US/Central", "US/Mountain", "US/Pacific", etc.
+FANTASY_TIMEZONE = os.getenv("FANTASY_TIMEZONE", "US/Eastern")
+
+# --- Concurrency ---
+CONCURRENCY_LIMIT = int(os.getenv("CONCURRENCY_LIMIT", "50"))
+API_TIMEOUT = int(os.getenv("API_TIMEOUT", "10"))
 
 # --- FANTASY LEAGUE SCORING WEIGHTS ---
 # (Matches your script's calculations)
@@ -36,13 +44,18 @@ GOALIE_FPTS_WEIGHTS = {
     "otLosses": 1,
 }
 
-NHL_TO_ESPN_POSITION_MAP = {
-    "C": "Center",
-    "L": "Left Wing",
-    "R": "Right Wing",
-    "D": "Defense",
-    "G": "Goalie",
-}
+# Position constants
+GOALIE_POSITIONS = {"G"}
+SKATER_POSITIONS = {"C", "L", "R", "D"}
+
+# Game type constants
+REGULAR_SEASON_GAME_TYPE = 2
+PLAYOFF_GAME_TYPE = 3
+
+# Decision constants
+WIN_DECISION = "W"
+LOSS_DECISION = "L"
+OT_LOSS_DECISION = "O"
 
 # --- DATA FILEPATHS ---
 DATA_DIR = "data"

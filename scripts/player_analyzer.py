@@ -14,6 +14,7 @@ Example:
 """
 
 import sys
+from typing import Optional
 import pandas as pd
 from src.database.database import engine  # Imports the engine from your database.py
 from src.utils.date_utils import (
@@ -131,12 +132,28 @@ def print_header(title):
     print("=" * 60)
 
 
-def get_opponent_from_string(game_str):
-    """Extracts opponent abbreviation (e.g., 'WSH') from 'vs WSH (date)' or '@ WSH (date)'."""
+def get_opponent_from_string(game_str: str) -> Optional[str]:
+    """
+    Extracts opponent abbreviation from game string.
+
+    Args:
+        game_str: Game string like 'vs WSH (2025-11-17)' or '@ BOS (2025-11-18)'
+
+    Returns:
+        Team abbreviation or None if parsing fails
+
+    Raises:
+        ValueError: If game_str is empty
+    """
+    if not game_str or not game_str.strip():
+        raise ValueError("game_str cannot be empty")
+
     match = re.search(r"(@|vs) ([A-Z]{2,3})", game_str)
-    if match:
-        return match.group(2)
-    return None
+    if not match:
+        print(f"Warning: Could not parse opponent from '{game_str}'")
+        return None
+
+    return match.group(2)
 
 
 def main():

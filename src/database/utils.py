@@ -1,5 +1,5 @@
-from sqlmodel import Session, select
-from typing import List, Dict, Any
+from sqlmodel import Session, select, desc
+from typing import List, Dict, Union, Any, cast
 
 # Import your models
 from .models import (
@@ -42,16 +42,41 @@ def bulk_insert_data(session: Session, data: List[Any]):
     print("Bulk insert complete.")
 
 
-def bulk_merge_data(session: Session, data: List[Any]):
+def bulk_merge_data(session: Session, data: List[Any]) -> int:
     """
     Merges a list of SQLModel objects into the database session.
     This performs an "upsert" (insert or update) for each item.
     Does NOT commit the session.
+
+    Returns:
+        Number of successfully merged items
+
+    Raises:
+        Exception: Re-raises the first critical error after logging all failures
     """
+    if not data:
+        print("No data to merge.")
+        return 0
+
     print(f"Merging {len(data)} objects into session...")
+    merged_count = 0
+    failed_items: List[tuple[Any, Exception]] = []
+
     for item in data:
-        session.merge(item)
-    print("Bulk merge complete. (Remember to commit the session)")
+        try:
+            session.merge(item)
+            merged_count += 1
+        except Exception as e:
+            # Log the error but continue processing
+            print(f"Warning: Failed to merge item {item}: {e}")
+            failed_items.append((item, e))
+
+    if failed_items:
+        print(f"⚠️  {len(failed_items)} items failed to merge out of {len(data)}")
+        # You could log failed items to a file here if needed
+
+    print(f"Bulk merge complete. Successfully merged {merged_count}/{len(data)} items.")
+    return merged_count
 
 
 # --- ProPlayers Utilities ---
@@ -103,7 +128,7 @@ def get_free_agents(session: Session) -> List[ProPlayers]:
     Returns a list of all players who are not on a fantasy team.
     """
     statement = select(ProPlayers).where(ProPlayers.fantasy_team_id == None)
-    return session.exec(statement).all()
+    return list(session.exec(statement).all())
 
 
 # --- FantasyTeam Utilities ---
@@ -122,7 +147,7 @@ def get_fantasy_team_roster(session: Session, fantasy_team_id: int) -> List[ProP
     Returns a list of all ProPlayers on a given fantasy team.
     """
     statement = select(ProPlayers).where(ProPlayers.fantasy_team_id == fantasy_team_id)
-    return session.exec(statement).all()
+    return list(session.exec(statement).all())
 
 
 # --- GameStats Utilities ---
@@ -135,9 +160,9 @@ def get_player_game_log(session: Session, player_id: int) -> List[PlayerGameStat
     statement = (
         select(PlayerGameStats)
         .where(PlayerGameStats.player_id == player_id)
-        .order_by(PlayerGameStats.game_date.desc())
+        .order_by(desc(PlayerGameStats.game_date))
     )
-    return session.exec(statement).all()
+    return list(session.exec(statement).all())
 
 
 def get_goalie_game_log(session: Session, player_id: int) -> List[GoalieGameStats]:
@@ -147,12 +172,14 @@ def get_goalie_game_log(session: Session, player_id: int) -> List[GoalieGameStat
     statement = (
         select(GoalieGameStats)
         .where(GoalieGameStats.player_id == player_id)
-        .order_by(GoalieGameStats.game_date.desc())
+        .order_by(desc(GoalieGameStats.game_date))
     )
-    return session.exec(statement).all()
+    return list(session.exec(statement).all())
 
 
-def get_all_stats_for_date(session: Session, game_date: str) -> Dict[str, List[Any]]:
+def get_all_stats_for_date(
+    session: Session, game_date: str
+) -> Dict[str, List[Union[PlayerGameStats, GoalieGameStats]]]:
     """
     Returns all skater and goalie stats for a specific date.
     """
@@ -163,7 +190,13 @@ def get_all_stats_for_date(session: Session, game_date: str) -> Dict[str, List[A
         GoalieGameStats.game_date == game_date
     )
 
-    skater_stats = session.exec(skater_statement).all()
-    goalie_stats = session.exec(goalie_statement).all()
+    skater_stats: List[Union[PlayerGameStats, GoalieGameStats]] = cast(
+        List[Union[PlayerGameStats, GoalieGameStats]],
+        list(session.exec(skater_statement).all()),
+    )
+    goalie_stats: List[Union[PlayerGameStats, GoalieGameStats]] = cast(
+        List[Union[PlayerGameStats, GoalieGameStats]],
+        list(session.exec(goalie_statement).all()),
+    )
 
     return {"skaters": skater_stats, "goalies": goalie_stats}

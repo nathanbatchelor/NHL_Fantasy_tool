@@ -14,9 +14,7 @@ import time
 import asyncio
 from datetime import datetime, timedelta
 from src.database.database import init_db
-from src.api.player_stats_fetcher import (
-    process_games,
-)  # Import the new core processor
+from src.api.player_stats_fetcher import process_games
 from src.api.nhl_api_utils import get_schedule
 from src.utils.date_utils import get_schedule_by_date
 
@@ -41,8 +39,7 @@ async def main():
     print(f"=" * 60)
 
     # --- Get yesterday's games from schedule ---
-    # We don't force refresh, let it use the schedule cache
-    schedule_by_id = get_schedule()
+    schedule_by_id = await get_schedule()
     schedule_by_date = get_schedule_by_date(schedule_by_id)
 
     yesterdays_games = schedule_by_date.get(yesterday_str, [])

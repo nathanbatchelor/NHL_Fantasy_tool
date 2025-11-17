@@ -3,6 +3,8 @@ utils/date_utils.py
 All date and time-related helper functions.
 """
 
+from typing import Dict, List
+import asyncio
 import pytz
 from datetime import datetime, timedelta
 from collections import defaultdict
@@ -35,9 +37,15 @@ def get_week_dates(year: int, week: int) -> tuple[str, str]:
     return (target_monday.strftime("%Y-%m-%d"), target_sunday.strftime("%Y-%m-%d"))
 
 
-def get_schedule_by_date(schedule_by_id: dict) -> dict:
+def get_schedule_by_date(schedule_by_id: Dict[str, dict]) -> Dict[str, List[dict]]:
     """
     Re-index the master schedule by fantasy date string.
+
+    Args:
+        schedule_by_id: Schedule dict keyed by game_id
+
+    Returns:
+        Dict mapping date strings (YYYY-MM-DD) to list of game dicts
     """
     schedule_by_date = defaultdict(list)
     fantasy_tz = pytz.timezone(constants.FANTASY_TIMEZONE)
@@ -53,13 +61,14 @@ def get_schedule_by_date(schedule_by_id: dict) -> dict:
     return dict(schedule_by_date)
 
 
-def calculate_remaining_week_matchups() -> dict:
+async def calculate_remaining_week_matchups() -> Dict[str, List[str]]:
     """
     Calculates remaining games for all teams from today
     through the end of the current fantasy week (Mon-Sun).
 
     Returns:
-        dict: { "TEAM_ABBREV": ["vs OPP (YYYY-MM-DD)", ...], ... }
+        Dict mapping team abbreviation to list of game strings.
+        Example: {"TOR": ["vs BOS (2025-11-17)", "@ MTL (2025-11-19)"], ...}
     """
 
     # 1. Get today's date in the correct timezone
@@ -71,7 +80,7 @@ def calculate_remaining_week_matchups() -> dict:
     end_of_week = today + timedelta(days=7 - today_weekday_iso)
 
     # 3. Load the full schedule, indexed by date
-    schedule_by_id = get_schedule()
+    schedule_by_id = await get_schedule()
     schedule_by_date = get_schedule_by_date(schedule_by_id)
 
     # 4. Find all games from *today* until the end of the week
@@ -85,7 +94,7 @@ def calculate_remaining_week_matchups() -> dict:
         current_day += timedelta(days=1)
 
     # 5. Group the remaining games by team
-    matchups = {}
+    matchups: Dict[str, List[str]] = {}
     for game in all_remaining_games:
         home_team = game["home_abbrev"]
         away_team = game["away_abbrev"]
