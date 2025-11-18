@@ -162,4 +162,10 @@ nhl-fantasy-tool/
 
 -----
 
+## ⚖️ License & Copyright
+
+**© [2025] [Nathan Batchelor]. All Rights Reserved.**
+
+This source code is available for viewing purposes only. No part of this code may be used, modified, or distributed for any purpose without explicit written permission from the owner.
+
 *Last Updated: November 2025*
