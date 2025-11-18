@@ -2,7 +2,7 @@ import argparse
 import sys
 from sqlmodel import Session, select, func
 from src.core import constants
-from src.database.utils import clear_table
+from src.database.utils import clear_table, find_player_interactive
 from src.database.database import engine
 from src.database.models import FantasyTeam, ProPlayers
 from typing import List
@@ -41,81 +41,6 @@ def force_refresh(auto_confirm=False, session: Session = None):
 
     print("Operation cancelled. Refresh was unsuccessful.")
     return False
-
-
-def find_player_interactive(
-    session: Session, free_agents_only: bool = False
-) -> ProPlayers | None:
-    """
-    Interactively prompts the user to find a player in the pro_players table.
-    Handles 0, 1, and 2+ results cases.
-    If free_agents_only is True, only searches for players with fantasy_team_id IS NULL.
-    """
-    while True:
-        search_prompt = "  > Add player name (e.g., C. McDavid) or 'stop': "
-        if free_agents_only:
-            search_prompt = "  > Search Free Agent name (e.g., C. McDavid) or 'stop': "
-
-        search_name = input(search_prompt).strip()
-        if not search_name:
-            continue
-        if search_name.lower() == "stop":
-            return None
-
-        # Search the database
-        search_pattern = f"%{search_name}%"
-        statement = select(ProPlayers).where(
-            func.lower(ProPlayers.player_name).like(search_pattern.lower())
-        )
-
-        # --- MODIFICATION ---
-        # Add filter for free agents if requested
-        if free_agents_only:
-            statement = statement.where(ProPlayers.fantasy_team_id == None)
-
-        results = session.exec(statement).all()
-
-        if len(results) == 0:
-            print(f"  No players found matching '{search_name}'. Please try again.")
-            continue
-
-        if len(results) == 1:
-            player = results[0]
-            confirm_res = input(
-                f"  Found: {player.player_name} ({player.team_abbrev}). Add? (Y/n): "
-            ).lower()
-            if confirm_res in ["", "y", "yes"]:
-                return player
-            else:
-                print("  Player not added.")
-                continue
-
-        # More than 1 result, force user to pick
-        print(
-            f"\n  Found {len(results)} players matching '{search_name}'. Please pick one by ID:"
-        )
-        print("  " + "-" * 70)
-        print(f"  {'ID':<12} | {'Name':<25} | {'Team':<5} | {'#':<3} | {'Pos':<5}")
-        print("  " + "-" * 70)
-        id_map = {}
-        for player in results:
-            id_map[str(player.player_id)] = player
-            print(
-                f"  {player.player_id:<12} | {player.player_name:<25} | {player.team_abbrev:<5} | {player.jersey_number:<3} | {player.position:<5}"
-            )
-        print("  " + "-" * 70)
-
-        while True:
-            choice_id = input("  > Enter Player ID to select (or 'cancel'): ").strip()
-            if choice_id.lower() == "cancel":
-                break
-
-            chosen_player = id_map.get(choice_id)
-            if chosen_player:
-                print(f"  Selected: {chosen_player.player_name}")
-                return chosen_player
-            else:
-                print(f"  Invalid ID '{choice_id}'. Please try again.")
 
 
 def add_roster(session: Session, team: FantasyTeam):

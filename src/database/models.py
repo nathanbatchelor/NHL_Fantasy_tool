@@ -86,6 +86,12 @@ class ProPlayers(SQLModel, table=True):
     season_saves: int = Field(default=0)
     season_goals_against: int = Field(default=0)
 
+    prior_season_avg_fpts: float = Field(default=0.0)
+    prior_season_games_played: int = Field(default=0)
+
+    # --- PREDICTED STATS (FOR ML) ---
+    predicted_fpts: float = Field(default=0.0)
+
 
 class PlayerGameStats(SQLModel, table=True):
     """Player statistics for individual games"""
