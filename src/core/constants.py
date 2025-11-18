@@ -10,6 +10,8 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
+YOUR_NAME = os.getenv("YOUR_NAME", "")
+
 # --- API & SEASON CONFIG ---
 SEASON_ID = os.getenv("SEASON_ID", "20252026")
 WEB_URL = "https://api-web.nhle.com/v1"

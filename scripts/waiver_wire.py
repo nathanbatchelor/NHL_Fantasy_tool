@@ -17,20 +17,26 @@ from src.core.constants import SEASON_ID
 QUERY_HOT_FREE_AGENTS = text(
     """
     SELECT
-      ps.player_name,
-      ps.team_abbrev,
+      pp.player_name,
+      pp.team_abbrev,
+      pp.position,
+      -- ADDED: Join to fantasy_team table to get the team name
+      COALESCE(ft.team_name, '*** Free Agent ***') AS fantasy_team,
       COUNT(ps.game_id) AS games_last_14,
       AVG(ps.total_fpts) AS avg_fpts_last_14
     FROM
       player_game_stats ps
     JOIN
       pro_players pp ON ps.player_id = pp.player_id
+    -- ADDED: LEFT JOIN to get the fantasy team name if it exists
+    LEFT JOIN
+      fantasy_team ft ON pp.fantasy_team_id = ft.team_id
     WHERE
       ps.game_date >= date('now', '-14 days')
       AND ps.season = :current_season
-      AND pp.fantasy_team_id IS NULL  -- This is how we find free agents
+      AND (pp.fantasy_team_id IS NULL OR pp.fantasy_team_id = 1) -- Free Agents or Team 1
     GROUP BY
-      ps.player_id, ps.player_name, ps.team_abbrev
+      pp.player_id, pp.player_name, pp.team_abbrev, pp.position, ft.team_name
     HAVING
       games_last_14 > 2  -- Only show players with a decent number of games
     ORDER BY

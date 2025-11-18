@@ -30,10 +30,8 @@ class FantasyTeam(SQLModel, table=True):
     __tablename__ = "fantasy_team"
 
     team_id: int = Field(default=None, primary_key=True)
-    espn_team_id: Optional[int] = Field(default=None, unique=True, index=True)
-    team_name: str = Field(index=True)
-    owner_name: Optional[str] = None
-
+    team_name: str
+    owner_name: str = Field(index=True)
     # This creates the "roster" relationship
     # It will be a list of ProPlayers objects
     players: List["ProPlayers"] = Relationship(back_populates="fantasy_team")
@@ -57,6 +55,7 @@ class ProPlayers(SQLModel, table=True):
     position: Optional[str] = Field(default=None, index=True)  # e.g., C, LW, D, G
     jersey_number: Optional[int] = None
     is_active: bool = Field(default=True)  # To filter out retired players
+    is_goalie: bool = Field(default=False)
 
     # --- Status Info (from ESPN) ---
     injury_status: Optional[str] = Field(default=None)  # e.g., DAY_TO_DAY, OUT

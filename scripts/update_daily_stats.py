@@ -4,8 +4,7 @@ update_daily_stats.py (Refactored)
 Fetches and updates player stats for yesterday's games only.
 Run this script daily (via cron) to keep the database current.
 
-It's now a thin wrapper around the core logic in
-`utils.player_stats_fetcher`.
+This script now uses the PlayerStatsProcessor class.
 """
 
 import src.core.constants as constants
@@ -14,7 +13,9 @@ import time
 import asyncio
 from datetime import datetime, timedelta
 from src.database.database import init_db
-from src.api.player_stats_fetcher import process_games
+
+# --- 1. IMPORT THE CLASS, NOT THE FUNCTION ---
+from src.api.player_stats_fetcher import PlayerStatsProcessor
 from src.api.nhl_api_utils import get_schedule
 from src.utils.date_utils import get_schedule_by_date
 
@@ -56,10 +57,13 @@ async def main():
         )
         yesterdays_game_ids.append(int(game["game_id"]))
 
-    # Call the core processor
+    # --- 2. USE THE CLASS ---
     # use_cache=True to skip games already marked 'final'
     if yesterdays_game_ids:
-        await process_games(game_ids_to_process=yesterdays_game_ids, use_cache=True)
+        # Create an instance with cache enabled
+        processor = PlayerStatsProcessor(use_cache=True)
+        # Call the process_games method on the instance
+        await processor.process_games(game_ids_to_process=yesterdays_game_ids)
 
     # --- Done ---
     end_time = time.perf_counter()

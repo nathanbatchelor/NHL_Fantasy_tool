@@ -11,9 +11,11 @@ from tenacity import (
 from typing import DefaultDict, Dict, List, Any, Union, Optional, Tuple
 
 import src.core.constants as constants
-from sqlmodel import Session
+from sqlmodel import Session, select
 from src.database.database import engine
-from src.database.models import PlayerGameStats, GoalieGameStats
+
+# Import ProPlayers model for the incremental update
+from src.database.models import PlayerGameStats, GoalieGameStats, ProPlayers
 
 from src.database.utils import bulk_merge_data
 from src.api.models import (
@@ -28,362 +30,139 @@ from typing import List, Union, cast
 from datetime import datetime
 from src.utils.cache_utils import load_data_from_cache, save_data_to_cache
 
-
-# --- HELPERS ---
-def toi_to_seconds(toi_str: str) -> int:
-    try:
-        minutes, seconds = map(int, toi_str.split(":"))
-        return (minutes * 60) + seconds
-    except:
-        return 0
+# Import from nhl_api_utils as you had, assuming it's moved there.
+from .helpers import *
 
 
-# --- Async Fetch Functions ---
+# --- MAIN PROCESSOR CLASS ---
 
 
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=2, max=10),
-    retry=retry_if_exception_type(httpx.HTTPError),
-)
-async def fetch_player_log(
-    client: httpx.AsyncClient, semaphore: asyncio.Semaphore, player_id: int
-) -> Optional[Tuple[int, PlayerGameLogResponse]]:
+class PlayerStatsProcessor:
     """
-    Fetches one player's entire season game log.
-
-    Returns:
-        Tuple of (player_id, log_response) or None if fetch fails
+    Orchestrates the fetching, processing, and caching of game stats,
+    and updates the ProPlayers table incrementally.
     """
-    url = f"{constants.WEB_URL}/player/{player_id}/game-log/{constants.SEASON_ID}/2"
-    async with semaphore:
-        try:
-            res = await client.get(url, timeout=constants.API_TIMEOUT)
-            res.raise_for_status()
-            data = res.json()
-            if not data:
-                return None
-            log_response = PlayerGameLogResponse(**data)
-            return (player_id, log_response)
-        except httpx.RequestError as e:
-            print(f"Error (Player Log {player_id}): {e}")
-            return None
-        except Exception as e:
-            print(f"Error (Player Log {player_id} parsing): {e}")
-            return None
 
+    def __init__(self, use_cache: bool, perform_incremental_update: bool = True):
+        self.use_cache = use_cache
+        # --- NEW: Control for incremental logic ---
+        self.perform_incremental_update = perform_incremental_update
 
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=2, max=10),
-    retry=retry_if_exception_type(httpx.HTTPError),
-)
-async def fetch_game_boxscore(
-    client: httpx.AsyncClient, semaphore: asyncio.Semaphore, game_id: int
-) -> Optional[GameBoxscoreResponse]:
-    """
-    Fetches the full boxscore for a single game.
+        # This is the "state" that your script was passing around
+        self.game_cache_internal: DefaultDict[int, Dict[int, FinalPlayerGameStats]] = (
+            defaultdict(dict)
+        )
+        self.boxscore_map: Dict[int, GameBoxscoreResponse] = {}
+        self.game_stats_cache_on_disk: Dict[str, Any] = {}
+        self.game_ids_to_fetch_fresh: List[int] = []
+        self.game_ids_from_cache: List[int] = []
 
-    Returns:
-        GameBoxscoreResponse or None if fetch fails
-    """
-    url = f"{constants.WEB_URL}/gamecenter/{game_id}/boxscore"
+    async def process_games(self, game_ids_to_process: List[int]):
+        """
+        Main orchestrator to fetch, process, and cache game stats.
+        This is the primary public method.
+        """
+        start_time = time.perf_counter()
+        print(
+            f"Processing {len(game_ids_to_process)} games. Cache enabled: {self.use_cache}"
+        )
 
-    async with semaphore:
-        try:
-            res = await client.get(url, timeout=constants.API_TIMEOUT)
-            res.raise_for_status()
-            data = res.json()
-            if not data:
-                return None
+        # --- 1. Load on-disk cache and partition games ---
+        self._load_and_partition_games(game_ids_to_process)
 
-            boxscore_response = GameBoxscoreResponse(**data)
-            return boxscore_response
+        # --- 2. Fetch all fresh game data (Phases 1-3) ---
+        await self._fetch_fresh_game_data()
 
-        except httpx.RequestError as e:
-            print(f"Error (Boxscore {game_id}): {e}")
-            return None
-        except Exception as e:
-            print(f"Error (Boxscore {game_id} parsing): {e}")
-            return None
+        # --- 3. Update on-disk cache (Phase 4) ---
+        self._update_on_disk_cache()
 
+        # --- 4. Write all data (cached + fresh) to DB (Phase 5) ---
+        # This now includes the incremental ProPlayer update
+        self._write_data_to_db()
 
-# --- Stat Processing Helpers ---
+        end_time = time.perf_counter()
+        print(f"\n--- PROCESSING COMPLETE ({end_time - start_time:.2f}s) ---")
 
+    # --- Private Helper Methods ---
 
-def merge_skater_stats(entry: FinalPlayerGameStats, stats: PlayerStatsFromBoxscore):
-    """Helper function to update the cache entry with skater stats."""
-    entry.name = stats.name.get("default", "N/A")
-    entry.position = stats.position
-    entry.goals = stats.goals
-    entry.assists = stats.assists
-    entry.sog = stats.sog
-    entry.blockedShots = stats.blockedShots
-    entry.hits = stats.hits
-    entry.sweaterNumber = stats.sweaterNumber
+    def _load_and_partition_games(self, game_ids_to_process: List[int]):
+        """
+        Loads the on-disk cache and partitions games into "fresh fetch" vs "load from cache".
+        Mutates: self.game_stats_cache_on_disk, self.game_ids_to_fetch_fresh,
+                 self.game_ids_from_cache, self.boxscore_map, self.game_cache_internal
+        """
+        cache_result = load_data_from_cache(constants.GAME_STATS_CACHE)
+        self.game_stats_cache_on_disk = (
+            cache_result if isinstance(cache_result, dict) else {}
+        )
 
+        if self.use_cache:
+            for game_id in game_ids_to_process:
+                cached_game = self.game_stats_cache_on_disk.get(str(game_id))
+                if cached_game and cached_game.get("status") == "final":
+                    self.game_ids_from_cache.append(game_id)
+                else:
+                    self.game_ids_to_fetch_fresh.append(game_id)
+        else:
+            self.game_ids_to_fetch_fresh = list(game_ids_to_process)
 
-def merge_goalie_stats(entry: FinalPlayerGameStats, stats: GoalieStatsFromBoxscore):
-    """Helper function to update the cache entry with goalie stats."""
-    entry.name = stats.name.get("default", "N/A")
-    entry.position = stats.position
-    entry.saves = stats.saves
-    entry.savePctg = stats.savePctg
-    entry.goalsAgainst = stats.goalsAgainst
-    entry.decision = stats.decision
-    entry.sweaterNumber = stats.sweaterNumber
+        print(f"  - Loading {len(self.game_ids_from_cache)} games from cache.")
+        print(
+            f"  - Fetching {len(self.game_ids_to_fetch_fresh)} new/updated games from API."
+        )
 
+        # --- Load Cached Games ---
+        for game_id in self.game_ids_from_cache:
+            cached_data = self.game_stats_cache_on_disk.get(str(game_id))
+            if not cached_data:
+                continue
 
-def calculate_fantasy_points_skater(stats: FinalPlayerGameStats) -> float:
-    """Calculate fantasy points for a skater."""
-    weights = constants.SKATER_FPTS_WEIGHTS
-
-    fpts = (
-        stats.goals * weights["goals"]
-        + stats.assists * weights["assists"]
-        + stats.powerPlayPoints * weights["ppPoints"]
-        + stats.shorthandedPoints * weights["shPoints"]
-        + stats.sog * weights["shots"]
-        + stats.blockedShots * weights["blockedShots"]
-        + stats.hits * weights["hits"]
-    )
-    return round(fpts, 2)
-
-
-def calculate_fantasy_points_goalie(stats: FinalPlayerGameStats) -> float:
-    """Calculate fantasy points for a goalie."""
-    weights = constants.GOALIE_FPTS_WEIGHTS
-
-    # Determine decision outcomes
-    wins = 1 if stats.decision == constants.WIN_DECISION else 0
-    ot_losses = 1 if stats.decision == constants.OT_LOSS_DECISION else 0
-    shutouts = (
-        1
-        if (stats.goalsAgainst == 0 and stats.saves is not None and stats.saves > 0)
-        else 0
-    )
-
-    fpts = (
-        wins * weights["wins"]
-        + (stats.goalsAgainst or 0) * weights["goalsAgainst"]
-        + (stats.saves or 0) * weights["saves"]
-        + shutouts * weights["shutouts"]
-        + ot_losses * weights["otLosses"]
-    )
-    return round(fpts, 2)
-
-
-def get_opponent_abbrev(boxscore: GameBoxscoreResponse, team_abbrev: str) -> str:
-    """Determine opponent abbreviation based on player's team."""
-    if team_abbrev == boxscore.homeTeam.abbrev:
-        return boxscore.awayTeam.abbrev
-    else:
-        return boxscore.homeTeam.abbrev
-
-
-# --- Database Writer (MODIFIED) ---
-
-
-def write_stats_to_db(game_cache: dict, boxscore_map: dict):
-    """
-    PHASE 5: Write all collected stats to the database.
-    Uses a bulk merge for efficiency.
-    """
-    print("\n--- Phase 5: Writing to database...")
-
-    skater_records_to_merge = []
-    goalie_records_to_merge = []
-
-    for game_id, players in game_cache.items():
-        # Get the boxscore to determine opponent
-        boxscore = boxscore_map.get(game_id)
-        if not boxscore:
-            print(
-                f"Warning: No boxscore found for game {game_id}. Skipping DB write for this game."
-            )
-            continue
-
-        for player_id, stats in players.items():
-            opponent_abbrev = get_opponent_abbrev(boxscore, stats.teamAbbrev)
-
-            team_name = constants.TEAM_MAP.get(stats.teamAbbrev)
-            opponent_name = constants.TEAM_MAP.get(opponent_abbrev)
-
-            # Determine if this is a skater or goalie
-            if stats.position in constants.GOALIE_POSITIONS:
-                # Goalie
-                goalie_record = GoalieGameStats(
-                    game_id=stats.gameId,
-                    player_id=stats.playerId,
-                    season=constants.SEASON_ID,
-                    game_date=stats.gameDate,
-                    team_abbrev=stats.teamAbbrev,
-                    team_name=team_name,
-                    opponent_abbrev=opponent_abbrev,
-                    opponent_name=opponent_name,
-                    player_name=stats.name,
-                    jersey_number=stats.sweaterNumber,
-                    position="Goalie",  # Use the simplified position
-                    saves=stats.saves or 0,
-                    save_pct=stats.savePctg or 0.0,
-                    goals_against=stats.goalsAgainst or 0,
-                    decision=stats.decision,
-                    wins=1 if stats.decision == "W" else 0,
-                    shutouts=(
-                        1
-                        if (stats.goalsAgainst == 0 and stats.saves and stats.saves > 0)
-                        else 0
-                    ),
-                    ot_losses=1 if stats.decision == "O" else 0,
-                    total_fpts=calculate_fantasy_points_goalie(stats),
+            try:
+                self.boxscore_map[game_id] = GameBoxscoreResponse(
+                    **cached_data["boxscore_raw"]
                 )
-                goalie_records_to_merge.append(goalie_record)
-            else:
-                # Skater
-                shooting_pct = None
-                if stats.sog > 0:
-                    shooting_pct = stats.goals / stats.sog
-
-                skater_record = PlayerGameStats(
-                    game_id=stats.gameId,
-                    player_id=stats.playerId,
-                    season=constants.SEASON_ID,
-                    game_date=stats.gameDate,
-                    team_abbrev=stats.teamAbbrev,
-                    team_name=team_name,
-                    opponent_abbrev=opponent_abbrev,
-                    opponent_name=opponent_name,
-                    player_name=stats.name,
-                    jersey_number=stats.sweaterNumber,
-                    position=stats.position,
-                    goals=stats.goals,
-                    assists=stats.assists,
-                    pp_points=float(stats.powerPlayPoints),
-                    sh_points=float(stats.shorthandedPoints),
-                    shots=stats.sog,
-                    shooting_pct=shooting_pct,
-                    blocked_shots=stats.blockedShots,
-                    hits=stats.hits,
-                    total_fpts=calculate_fantasy_points_skater(stats),
-                    toi_seconds=toi_to_seconds(stats.toi),
-                    shifts=stats.shifts,
+                for player_id_str, player_stats_dict in cached_data["players"].items():
+                    self.game_cache_internal[game_id][int(player_id_str)] = (
+                        FinalPlayerGameStats(**player_stats_dict)
+                    )
+            except Exception as e:
+                print(
+                    f"Warning: Cache for game {game_id} corrupted, re-fetching. Error: {e}"
                 )
-                skater_records_to_merge.append(skater_record)
+                self.game_ids_to_fetch_fresh.append(game_id)
+                # Note: This doesn't remove from game_ids_from_cache, but it's okay.
+                # The game will just be processed twice, and the DB merge will handle it.
 
-    # --- NEW: Use bulk_merge_data ---
-    # --- Use bulk_merge_data with error handling ---
-    with Session(engine) as session:
-        try:
-            skater_merged = bulk_merge_data(session, skater_records_to_merge)
-            goalie_merged = bulk_merge_data(session, goalie_records_to_merge)
+    async def _fetch_fresh_game_data(self):
+        """
+        Async function to perform Phases 1, 2, and 3:
+        Fetch boxscores, fetch player logs, and merge the data.
+        Reads:   self.game_ids_to_fetch_fresh
+        Mutates: self.game_cache_internal, self.boxscore_map
+        """
+        if not self.game_ids_to_fetch_fresh:
+            print("No fresh games to fetch.")
+            return
 
-            # Commit all changes at once
-            print(
-                f"Committing {skater_merged} skater and {goalie_merged} goalie records..."
-            )
-            session.commit()
-
-            print(f"✅ Database write complete!")
-            print(
-                f"  - Skaters: {skater_merged}/{len(skater_records_to_merge)} records"
-            )
-            print(
-                f"  - Goalies: {goalie_merged}/{len(goalie_records_to_merge)} records"
-            )
-
-        except Exception as e:
-            print(f"❌ Database commit failed: {e}")
-            session.rollback()
-            raise  # Re-raise so the calling script knows something went wrong
-
-
-# --- Main Orchestrator ---
-
-
-async def process_games(game_ids_to_process: List[int], use_cache: bool):
-    """
-    Main orchestrator to fetch, process, and cache game stats.
-
-    Args:
-        game_ids_to_process: A list of game IDs to process.
-        use_cache: If True, will load 'final' games from cache
-                   and skip fetching them.
-    """
-    start_time = time.perf_counter()
-    print(f"Processing {len(game_ids_to_process)} games. Cache enabled: {use_cache}")
-
-    # In-memory cache for this run - with proper types
-    game_cache_internal: DefaultDict[int, Dict[int, FinalPlayerGameStats]] = (
-        defaultdict(dict)
-    )
-    boxscore_map: Dict[int, GameBoxscoreResponse] = {}
-
-    # Load the on-disk cache with type checking
-    cache_result = load_data_from_cache(constants.GAME_STATS_CACHE)
-    game_stats_cache_on_disk: Dict[str, Any] = (
-        cache_result if isinstance(cache_result, dict) else {}
-    )
-
-    game_ids_to_fetch_fresh: List[int] = []
-    game_ids_from_cache: List[int] = []
-
-    if use_cache:
-        for game_id in game_ids_to_process:
-            cached_game = game_stats_cache_on_disk.get(str(game_id))
-            # Load from cache *only* if it exists and is marked final
-            if cached_game and cached_game.get("status") == "final":
-                game_ids_from_cache.append(game_id)
-            else:
-                game_ids_to_fetch_fresh.append(game_id)
-    else:
-        # Not using cache, so all games are "fresh"
-        game_ids_to_fetch_fresh = list(game_ids_to_process)
-
-    print(f"  - Loading {len(game_ids_from_cache)} games from cache.")
-    print(f"  - Fetching {len(game_ids_to_fetch_fresh)} new/updated games from API.")
-
-    # --- Load Cached Games ---
-    for game_id in game_ids_from_cache:
-        cached_data = game_stats_cache_on_disk.get(str(game_id))
-        if not cached_data:
-            continue
-
-        try:
-            # Re-construct the Pydantic models from the cached dicts
-            boxscore_map[game_id] = GameBoxscoreResponse(**cached_data["boxscore_raw"])
-            for player_id_str, player_stats_dict in cached_data["players"].items():
-                game_cache_internal[game_id][int(player_id_str)] = FinalPlayerGameStats(
-                    **player_stats_dict
-                )
-        except Exception as e:
-            # If cache is corrupted, just re-fetch the game
-            print(
-                f"Warning: Cache for game {game_id} corrupted, re-fetching. Error: {e}"
-            )
-            game_ids_to_fetch_fresh.append(game_id)
-
-    # --- Fetch Fresh Games ---
-    if game_ids_to_fetch_fresh:
+        start_time = time.perf_counter()
         semaphore = asyncio.Semaphore(constants.CONCURRENCY_LIMIT)
         async with httpx.AsyncClient() as client:
             # --- PHASE 1: Fetch boxscores ---
             print(
-                f"\n--- Phase 1: Fetching {len(game_ids_to_fetch_fresh)} boxscores..."
+                f"\n--- Phase 1: Fetching {len(self.game_ids_to_fetch_fresh)} boxscores..."
             )
             boxscore_tasks = [
                 fetch_game_boxscore(client, semaphore, game_id)
-                for game_id in game_ids_to_fetch_fresh
+                for game_id in self.game_ids_to_fetch_fresh
             ]
             boxscore_results = await asyncio.gather(
                 *boxscore_tasks, return_exceptions=True
             )
 
-            # Filter out failed requests and process successful ones
             player_ids_to_fetch_log: set[int] = set()
-
             for i, result in enumerate(boxscore_results):
                 if isinstance(result, Exception):
-                    game_id = game_ids_to_fetch_fresh[i]
+                    game_id = self.game_ids_to_fetch_fresh[i]
                     print(
                         f"Warning: Failed to fetch boxscore for game {game_id}: {result}"
                     )
@@ -391,21 +170,19 @@ async def process_games(game_ids_to_process: List[int], use_cache: bool):
                 if result is None:
                     continue
 
-                # Type assertion - we know result is GameBoxscoreResponse here
                 assert isinstance(result, GameBoxscoreResponse)
-                boxscore_map[result.id] = result
+                self.boxscore_map[result.id] = result  # Mutate map
 
-                # Get all players from the game
                 all_players: List[
                     Union[PlayerStatsFromBoxscore, GoalieStatsFromBoxscore]
-                ] = []
-                all_players.extend(result.playerByGameStats.awayTeam.forwards)
-                all_players.extend(result.playerByGameStats.awayTeam.defense)
-                all_players.extend(result.playerByGameStats.awayTeam.goalies)
-                all_players.extend(result.playerByGameStats.homeTeam.forwards)
-                all_players.extend(result.playerByGameStats.homeTeam.defense)
-                all_players.extend(result.playerByGameStats.homeTeam.goalies)
-
+                ] = (
+                    result.playerByGameStats.awayTeam.forwards
+                    + result.playerByGameStats.awayTeam.defense
+                    + result.playerByGameStats.awayTeam.goalies
+                    + result.playerByGameStats.homeTeam.forwards
+                    + result.playerByGameStats.homeTeam.defense
+                    + result.playerByGameStats.homeTeam.goalies
+                )
                 for player_stats in all_players:
                     player_ids_to_fetch_log.add(player_stats.playerId)
 
@@ -426,7 +203,6 @@ async def process_games(game_ids_to_process: List[int], use_cache: bool):
                 *player_log_tasks, return_exceptions=True
             )
 
-            # Populate the in-memory cache with partial data from logs
             for log_result in player_log_results:
                 if isinstance(log_result, Exception):
                     print(f"Warning: Failed to process player log: {log_result}")
@@ -434,14 +210,12 @@ async def process_games(game_ids_to_process: List[int], use_cache: bool):
                 if log_result is None:
                     continue
 
-                # Type assertion - we know log_result is a tuple here
                 assert isinstance(log_result, tuple) and len(log_result) == 2
                 player_id: int = log_result[0]
                 log_response: PlayerGameLogResponse = log_result[1]
 
                 for game in log_response.gameLog:
-                    # Only add data for the games we are processing
-                    if game.gameId in game_ids_to_fetch_fresh:
+                    if game.gameId in self.game_ids_to_fetch_fresh:
                         final_stats = FinalPlayerGameStats(
                             playerId=player_id,
                             gameId=game.gameId,
@@ -453,7 +227,8 @@ async def process_games(game_ids_to_process: List[int], use_cache: bool):
                             shifts=game.shifts,
                             pim=game.pim,
                         )
-                        game_cache_internal[game.gameId][player_id] = final_stats
+                        # Mutate cache
+                        self.game_cache_internal[game.gameId][player_id] = final_stats
 
             phase2_time = time.perf_counter()
             print(
@@ -463,8 +238,8 @@ async def process_games(game_ids_to_process: List[int], use_cache: bool):
             # --- PHASE 3: Merge boxscore data ---
             print("\n--- Phase 3: Merging boxscore data...")
             merge_count = 0
-            for game_id in game_ids_to_fetch_fresh:
-                boxscore = boxscore_map.get(game_id)
+            for game_id in self.game_ids_to_fetch_fresh:
+                boxscore = self.boxscore_map.get(game_id)
                 if not boxscore:
                     continue
 
@@ -472,19 +247,19 @@ async def process_games(game_ids_to_process: List[int], use_cache: bool):
 
                 all_players_phase3: List[
                     Union[PlayerStatsFromBoxscore, GoalieStatsFromBoxscore]
-                ] = []
-                all_players_phase3.extend(boxscore.playerByGameStats.awayTeam.forwards)
-                all_players_phase3.extend(boxscore.playerByGameStats.awayTeam.defense)
-                all_players_phase3.extend(boxscore.playerByGameStats.awayTeam.goalies)
-                all_players_phase3.extend(boxscore.playerByGameStats.homeTeam.forwards)
-                all_players_phase3.extend(boxscore.playerByGameStats.homeTeam.defense)
-                all_players_phase3.extend(boxscore.playerByGameStats.homeTeam.goalies)
+                ] = (
+                    boxscore.playerByGameStats.awayTeam.forwards
+                    + boxscore.playerByGameStats.awayTeam.defense
+                    + boxscore.playerByGameStats.awayTeam.goalies
+                    + boxscore.playerByGameStats.homeTeam.forwards
+                    + boxscore.playerByGameStats.homeTeam.defense
+                    + boxscore.playerByGameStats.homeTeam.goalies
+                )
 
                 for player_stats in all_players_phase3:
                     player_id = player_stats.playerId
-                    # Check if this player is in our cache (i.e., we got log data)
-                    if player_id in game_cache_internal[game_id]:
-                        entry_to_update = game_cache_internal[game_id][player_id]
+                    if player_id in self.game_cache_internal[game_id]:
+                        entry_to_update = self.game_cache_internal[game_id][player_id]
 
                         if isinstance(player_stats, PlayerStatsFromBoxscore):
                             merge_skater_stats(entry_to_update, player_stats)
@@ -498,37 +273,275 @@ async def process_games(game_ids_to_process: List[int], use_cache: bool):
                 f"Phase 3 complete. Merged {merge_count} records. ({phase3_time - phase2_time:.2f}s)"
             )
 
-    # --- PHASE 4: Update Cache on Disk ---
-    print("\n--- Phase 4: Updating on-disk cache...")
-    updated_count = 0
-    for game_id in game_ids_to_fetch_fresh:
-        boxscore = boxscore_map.get(game_id)
-        if not boxscore:
-            continue
+    def _update_on_disk_cache(self):
+        """
+        PHASE 4: Update the on-disk cache (game_stats_cache.json)
+        Reads:   self.game_ids_to_fetch_fresh, self.game_cache_internal,
+                 self.boxscore_map
+        Mutates: self.game_stats_cache_on_disk
+        """
+        print("\n--- Phase 4: Updating on-disk cache...")
+        updated_count = 0
+        for game_id in self.game_ids_to_fetch_fresh:
+            boxscore = self.boxscore_map.get(game_id)
+            if not boxscore:
+                continue
 
-        assert isinstance(boxscore, GameBoxscoreResponse)
+            assert isinstance(boxscore, GameBoxscoreResponse)
+            status = "final"  # Assuming all fetched games are final
 
-        status = "final"
+            players_dict = {
+                str(pid): stats.model_dump()
+                for pid, stats in self.game_cache_internal[game_id].items()
+            }
 
-        # Convert Pydantic models to dicts for JSON serialization
-        players_dict = {
-            str(pid): stats.model_dump()
-            for pid, stats in game_cache_internal[game_id].items()
+            # Mutate on-disk cache object
+            self.game_stats_cache_on_disk[str(game_id)] = {
+                "cached_at": datetime.utcnow().isoformat() + "Z",
+                "status": status,
+                "boxscore_raw": boxscore.model_dump(),
+                "players": players_dict,
+            }
+            updated_count += 1
+
+        if updated_count > 0:
+            save_data_to_cache(
+                self.game_stats_cache_on_disk, constants.GAME_STATS_CACHE
+            )
+            print(f"  ✅ Saved {updated_count} games to on-disk cache.")
+        else:
+            print("  - On-disk cache is already up-to-date.")
+
+    def _write_data_to_db(self):
+        """
+        PHASE 5: Transform data, write game stats to DB, and
+        incrementally update the ProPlayers table.
+        Reads: self.game_cache_internal, self.boxscore_map, self.game_ids_to_fetch_fresh
+        """
+        print("\n--- Phase 5: Writing to database and updating ProPlayers...")
+
+        skater_records_to_merge = []
+        goalie_records_to_merge = []
+
+        # --- NEW: Lists for *only* new stats ---
+        skater_records_for_incremental_update = []
+        goalie_records_for_incremental_update = []
+
+        # --- 1. Transform Pydantic models to SQLModel objects ---
+        for game_id, players in self.game_cache_internal.items():
+            boxscore = self.boxscore_map.get(game_id)
+            if not boxscore:
+                print(
+                    f"Warning: No boxscore found for game {game_id}. Skipping DB write for this game."
+                )
+                continue
+
+            for player_id, stats in players.items():
+                opponent_abbrev = get_opponent_abbrev(boxscore, stats.teamAbbrev)
+                team_name = constants.TEAM_MAP.get(stats.teamAbbrev)
+                opponent_name = constants.TEAM_MAP.get(opponent_abbrev)
+
+                if stats.position in constants.GOALIE_POSITIONS:
+                    # Goalie Record
+                    goalie_record = GoalieGameStats(
+                        game_id=stats.gameId,
+                        player_id=stats.playerId,
+                        season=constants.SEASON_ID,
+                        game_date=stats.gameDate,
+                        team_abbrev=stats.teamAbbrev,
+                        team_name=team_name,
+                        opponent_abbrev=opponent_abbrev,
+                        opponent_name=opponent_name,
+                        player_name=stats.name,
+                        jersey_number=stats.sweaterNumber,
+                        position="Goalie",
+                        saves=stats.saves or 0,
+                        save_pct=stats.savePctg or 0.0,
+                        goals_against=stats.goalsAgainst or 0,
+                        decision=stats.decision,
+                        wins=1 if stats.decision == "W" else 0,
+                        shutouts=(
+                            1
+                            if (
+                                stats.goalsAgainst == 0
+                                and stats.saves
+                                and stats.saves > 0
+                            )
+                            else 0
+                        ),
+                        ot_losses=1 if stats.decision == "O" else 0,
+                        total_fpts=calculate_fantasy_points_goalie(stats),
+                    )
+                    goalie_records_to_merge.append(goalie_record)
+
+                    # NEW: Only add to incremental list if it was a freshly fetched game
+                    if game_id in self.game_ids_to_fetch_fresh:
+                        goalie_records_for_incremental_update.append(goalie_record)
+                else:
+                    # Skater Record
+                    shooting_pct = None
+                    if stats.sog > 0:
+                        shooting_pct = stats.goals / stats.sog
+
+                    skater_record = PlayerGameStats(
+                        game_id=stats.gameId,
+                        player_id=stats.playerId,
+                        season=constants.SEASON_ID,
+                        game_date=stats.gameDate,
+                        team_abbrev=stats.teamAbbrev,
+                        team_name=team_name,
+                        opponent_abbrev=opponent_abbrev,
+                        opponent_name=opponent_name,
+                        player_name=stats.name,
+                        jersey_number=stats.sweaterNumber,
+                        position=stats.position,
+                        goals=stats.goals,
+                        assists=stats.assists,
+                        pp_points=float(stats.powerPlayPoints),
+                        sh_points=float(stats.shorthandedPoints),
+                        shots=stats.sog,
+                        shooting_pct=shooting_pct,
+                        blocked_shots=stats.blockedShots,
+                        hits=stats.hits,
+                        total_fpts=calculate_fantasy_points_skater(stats),
+                        toi_seconds=toi_to_seconds(stats.toi),
+                        shifts=stats.shifts,
+                    )
+                    skater_records_to_merge.append(skater_record)
+
+                    # NEW: Only add to incremental list if it was a freshly fetched game
+                    if game_id in self.game_ids_to_fetch_fresh:
+                        skater_records_for_incremental_update.append(skater_record)
+
+        # --- 2. & 3. Write stats and update ProPlayers in one transaction ---
+        with Session(engine) as session:
+            try:
+                # Step 2: Merge ALL game stats (from cache + fresh)
+                # This ensures game stats are always in the DB (handles your scenario)
+                print("  - Merging all game stats...")
+                skater_merged = bulk_merge_data(session, skater_records_to_merge)
+                goalie_merged = bulk_merge_data(session, goalie_records_to_merge)
+                print(
+                    f"  - Merged {skater_merged} skater and {goalie_merged} goalie records."
+                )
+
+                # --- MODIFIED: Add a guard ---
+                # Step 3: Incrementally update ProPlayers
+                # Only run this if the processor is told to.
+                if self.perform_incremental_update:
+                    self._update_pro_players_incrementally(
+                        session,
+                        skater_records_for_incremental_update,
+                        goalie_records_for_incremental_update,
+                    )
+                else:
+                    print(
+                        "  - Skipping incremental ProPlayers update (full rebuild requested)."
+                    )
+
+                # Commit all changes at once
+                print("  - Committing all database changes...")
+                session.commit()
+
+                print("✅ Database write complete!")
+
+            except Exception as e:
+                print(f"❌ Database commit failed: {e}")
+                session.rollback()
+                raise
+
+    def _update_pro_players_incrementally(
+        self,
+        session: Session,
+        new_skater_stats: List[PlayerGameStats],
+        new_goalie_stats: List[GoalieGameStats],
+    ):
+        """
+        Incrementally updates the ProPlayers table based on new game stats.
+        This is far more efficient than re-calculating totals for all players.
+        Runs *within* the main DB session.
+        """
+        print("  - Incrementally updating ProPlayers table...")
+        player_ids = {s.player_id for s in new_skater_stats} | {
+            g.player_id for g in new_goalie_stats
         }
+        if not player_ids:
+            print("    - No players to update.")
+            return 0
 
-        game_stats_cache_on_disk[str(game_id)] = {
-            "cached_at": datetime.utcnow().isoformat() + "Z",
-            "status": status,
-            "boxscore_raw": boxscore.model_dump(),
-            "players": players_dict,
-        }
-        updated_count += 1
+        # Fetch all players to update in one query
+        existing_players_list = session.exec(
+            select(ProPlayers).where(ProPlayers.player_id.in_(player_ids))
+        ).all()
+        existing_players_map = {p.player_id: p for p in existing_players_list}
 
-    if updated_count > 0:
-        save_data_to_cache(game_stats_cache_on_disk, constants.GAME_STATS_CACHE)
-        print(f"  ✅ Saved {updated_count} games to on-disk cache.")
-    else:
-        print("  - On-disk cache is already up-to-date.")
+        updated_count = 0
 
-    # --- PHASE 5: Write all data (cached + fresh) to DB ---
-    write_stats_to_db(game_cache_internal, boxscore_map)
+        # Process skaters
+        for stat in new_skater_stats:
+            player = existing_players_map.get(stat.player_id)
+            if not player:
+                # Create a new ProPlayer if they don't exist
+                player = ProPlayers(
+                    player_id=stat.player_id, is_active=True, is_goalie=False
+                )
+                session.add(player)
+                existing_players_map[stat.player_id] = player
+                print(f"    - Created new ProPlayer: {stat.player_name}")
+
+            # Update player info (always use the latest game's info)
+            player.player_name = stat.player_name
+            player.team_abbrev = stat.team_abbrev
+            player.position = stat.position
+            player.jersey_number = stat.jersey_number
+
+            # Increment seasonal stats
+            # This logic assumes you are not re-processing old, already-processed games.
+            # The bulk_merge_data for game stats handles updates, but this incremental
+            # logic is additive. If you re-run on old data, this will double-count.
+            # For a daily script, this is correct.
+            player.season_games_played = (player.season_games_played or 0) + 1
+            player.season_total_fpts = (player.season_total_fpts or 0) + stat.total_fpts
+            player.season_goals = (player.season_goals or 0) + stat.goals
+            player.season_assists = (player.season_assists or 0) + stat.assists
+            player.season_pp_points = (player.season_pp_points or 0) + stat.pp_points
+            player.season_sh_points = (player.season_sh_points or 0) + stat.sh_points
+            player.season_shots = (player.season_shots or 0) + stat.shots
+            player.season_blocked_shots = (
+                player.season_blocked_shots or 0
+            ) + stat.blocked_shots
+            player.season_hits = (player.season_hits or 0) + stat.hits
+            updated_count += 1
+
+        # Process goalies
+        for stat in new_goalie_stats:
+            player = existing_players_map.get(stat.player_id)
+            if not player:
+                player = ProPlayers(
+                    player_id=stat.player_id, is_active=True, is_goalie=True
+                )
+                session.add(player)
+                existing_players_map[stat.player_id] = player
+                print(f"    - Created new ProPlayer: {stat.player_name}")
+
+            # Update player info
+            player.player_name = stat.player_name
+            player.team_abbrev = stat.team_abbrev
+            player.position = stat.position  # "Goalie"
+            player.jersey_number = stat.jersey_number
+            player.is_goalie = True  # Ensure this is set
+
+            # Increment seasonal stats
+            player.season_games_played = (player.season_games_played or 0) + 1
+            player.season_total_fpts = (player.season_total_fpts or 0) + stat.total_fpts
+            player.season_wins = (player.season_wins or 0) + stat.wins
+            player.season_shutouts = (player.season_shutouts or 0) + stat.shutouts
+            player.season_ot_losses = (player.season_ot_losses or 0) + stat.ot_losses
+            player.season_saves = (player.season_saves or 0) + stat.saves
+            player.season_goals_against = (
+                player.season_goals_against or 0
+            ) + stat.goals_against
+            updated_count += 1
+
+        print(f"    - Updated {updated_count} ProPlayer records.")
+        return updated_count

@@ -4,8 +4,7 @@ seed_past_game_data_async.py (Refactored)
 This script seeds the database with stats for *all* games
 from the current season that have already been played.
 
-It's now a thin wrapper around the core logic in
-`utils.player_stats_fetcher`.
+This script now uses the PlayerStatsProcessor class.
 """
 
 import asyncio
@@ -14,10 +13,15 @@ from src.core.constants import FANTASY_TIMEZONE, DATABASE_FILE, SEASON_ID
 import pytz
 from datetime import datetime
 from src.database.database import init_db
+
+# --- 1. IMPORT THE CLASS, NOT THE FUNCTION ---
 from src.api.player_stats_fetcher import (
-    process_games,
-)  # Import the new core processor
+    PlayerStatsProcessor,
+)
 from src.api.nhl_api_utils import get_schedule  # Import the schedule fetcher
+
+# --- 2. IMPORT THE REBUILD FUNCTION ---
+from scripts.seed_pro_players import populate_pro_players
 
 
 async def main():
@@ -47,7 +51,9 @@ async def main():
         return
 
     # --- Filter for *past* games only ---
-    past_game_ids = []
+
+    # --- MODIFICATION: Store date with game_id to allow sorting ---
+    past_games_to_sort = []
     future_game_count = 0
     total_game_count = len(schedule_by_id)
 
@@ -61,7 +67,8 @@ async def main():
             game_local_date = game_utc_time.astimezone(tz).date()
 
             if game_local_date < today_local_date:
-                past_game_ids.append(int(game_id_str))
+                # Store as a tuple (date, game_id)
+                past_games_to_sort.append((game_local_date, int(game_id_str)))
             else:
                 future_game_count += 1
         except Exception as e:
@@ -69,18 +76,39 @@ async def main():
                 f"Warning: Could not parse date for game {game_id_str}. Skipping. Error: {e}"
             )
 
+    # --- NEW: Sort the past games by date (chronologically) ---
+    past_games_to_sort.sort(key=lambda x: x[0])
+
+    # Now create the final list of IDs in the correct order
+    past_game_ids = [game_id for game_date, game_id in past_games_to_sort]
+    # --- END MODIFICATION ---
+
     print(f"Found {total_game_count} total games for season {SEASON_ID}.")
     print(f"  - {len(past_game_ids)} games are in the past (will be processed).")
     print(
         f"  - {future_game_count} games are today or in the future (will be skipped)."
     )
 
-    # Call the core processor with the *filtered* list
+    # Call the core processor with the *filtered and sorted* list
     # use_cache=False to force re-fetch and re-build the cache
     if past_game_ids:
-        await process_games(game_ids_to_process=past_game_ids, use_cache=False)
+        # --- 3. PASS perform_incremental_update=False ---
+        # Create an instance with cache disabled and incremental updates OFF
+        processor = PlayerStatsProcessor(
+            use_cache=False, perform_incremental_update=False
+        )
+        # Call the process_games method on the instance
+        await processor.process_games(game_ids_to_process=past_game_ids)
     else:
         print("No past games found to process. Exiting.")
+
+    # --- 4. RUN THE FULL REBUILD ---
+    # Now that all stats are in the DB, run the full rebuild
+    # to get correct, non-duplicated season totals.
+    print("\n" + "=" * 50)
+    print("Running full ProPlayers table rebuild...")
+    populate_pro_players()
+    print("ProPlayers table rebuild complete.")
 
     # --- Done ---
     end_time = time.perf_counter()
