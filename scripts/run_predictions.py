@@ -236,6 +236,7 @@ async def main():
                 ProPlayers.is_active == True,
                 ProPlayers.position != "Goalie",
                 ProPlayers.position != "G",
+                # ProPlayers.position != "D",
                 ProPlayers.player_id.in_(players_with_games_subquery),
             )
         ).all()
