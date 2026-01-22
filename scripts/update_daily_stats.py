@@ -35,9 +35,9 @@ async def main():
     yesterday = datetime.now(tz) - timedelta(days=1)
     yesterday_str = yesterday.strftime("%Y-%m-%d")
 
-    print(f"=" * 60)
+    print("=" * 60)
     print(f"UPDATING STATS FOR: {yesterday_str}")
-    print(f"=" * 60)
+    print("=" * 60)
 
     # --- Get yesterday's games from schedule ---
     schedule_by_id = await get_schedule()

@@ -26,7 +26,7 @@ def force_refresh(auto_confirm=False, session: Session = None):
     if res == "y" or auto_confirm:
         clear_table(session, FantasyTeam)
         # Also need to clear the fantasy_team_id from all players
-        statement = select(ProPlayers).where(ProPlayers.fantasy_team_id != None)
+        statement = select(ProPlayers).where(ProPlayers.fantasy_team_id is not None)
         players_to_clear = session.exec(statement).all()
 
         if players_to_clear:

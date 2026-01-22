@@ -12,13 +12,10 @@ import sys
 import pandas as pd
 import pytz
 from datetime import datetime
-from sqlmodel import Session, select, func, text
+from sqlmodel import Session, select, text
 from src.database.utils import find_player_interactive
 from src.database.database import engine
 from src.database.models import (
-    ProPlayers,
-    PlayerGameStats,
-    GoalieGameStats,
     TeamSchedule,
 )
 from src.core.constants import SEASON_ID, FANTASY_TIMEZONE
@@ -198,7 +195,6 @@ def print_header(title):
     print("\n" + "=" * 60)
     print(f" {title.upper()}")
     print("=" * 60)
-
 
 
 def main():

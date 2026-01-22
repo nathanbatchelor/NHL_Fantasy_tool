@@ -9,7 +9,7 @@ the `pro_players` table is kept up-to-date by other scripts.
 """
 
 import pandas as pd
-from sqlmodel import Session, text
+from sqlmodel import text
 from src.database.database import engine
 from src.core.constants import SEASON_ID
 
@@ -34,14 +34,14 @@ QUERY_HOT_FREE_AGENTS = text(
     WHERE
       ps.game_date >= date('now', '-14 days')
       AND ps.season = :current_season
-      AND (pp.fantasy_team_id IS NULL or pp.fantasy_team_id IS 1) -- Free Agents or Team 1
+      -- AND (pp.fantasy_team_id IS NULL or pp.fantasy_team_id IS 1) -- Free Agents or Team 1
     GROUP BY
       pp.player_id, pp.player_name, pp.team_abbrev, pp.position, ft.team_name
     HAVING
       games_last_14 > 2  -- Only show players with a decent number of games
     ORDER BY
       avg_fpts_last_14 DESC
-    LIMIT 50;
+    LIMIT 100;
     """
 )
 

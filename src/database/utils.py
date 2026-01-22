@@ -7,7 +7,6 @@ from .models import (
     PlayerGameStats,
     GoalieGameStats,
     FantasyTeam,
-    TeamSchedule,
 )
 
 
@@ -127,7 +126,7 @@ def get_free_agents(session: Session) -> List[ProPlayers]:
     """
     Returns a list of all players who are not on a fantasy team.
     """
-    statement = select(ProPlayers).where(ProPlayers.fantasy_team_id == None)
+    statement = select(ProPlayers).where(ProPlayers.fantasy_team_id is None)
     return list(session.exec(statement).all())
 
 
@@ -230,7 +229,7 @@ def find_player_interactive(
         # --- MODIFICATION ---
         # Add filter for free agents if requested
         if free_agents_only:
-            statement = statement.where(ProPlayers.fantasy_team_id == None)
+            statement = statement.where(ProPlayers.fantasy_team_id is None)
 
         results = session.exec(statement).all()
 

@@ -23,7 +23,7 @@ def toi_to_seconds(toi_str: str) -> int:
     try:
         minutes, seconds = map(int, toi_str.split(":"))
         return (minutes * 60) + seconds
-    except:
+    except Exception:
         return 0
 
 

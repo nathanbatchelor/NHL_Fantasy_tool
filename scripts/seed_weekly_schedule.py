@@ -50,7 +50,7 @@ def save_to_database(team_week_data: dict):
     Saves the analyzed weekly schedule data to the database.
     This function will clear the table and do a fresh insert.
     """
-    print(f"\nSaving weekly schedule to database...")
+    print("\nSaving weekly schedule to database...")
     schedule_objects = []
 
     for team in sorted(team_week_data.keys()):

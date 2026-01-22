@@ -1,5 +1,5 @@
 from sqlmodel import SQLModel, Field, Index, Relationship
-from typing import Optional, List
+from typing import Optional, List, ClassVar
 
 
 class TeamSchedule(SQLModel, table=True):
@@ -8,7 +8,7 @@ class TeamSchedule(SQLModel, table=True):
     Loaded from your team_schedule.csv file.
     """
 
-    __tablename__ = "team_schedule"
+    __tablename__: ClassVar[str] = "team_schedule"
 
     id: int = Field(default=None, primary_key=True)
     team: str = Field(index=True)
@@ -27,7 +27,7 @@ class FantasyTeam(SQLModel, table=True):
     Represents a single fantasy team in your league.
     """
 
-    __tablename__ = "fantasy_team"
+    __tablename__: ClassVar[str] = "fantasy_team"
 
     team_id: int = Field(default=None, primary_key=True)
     team_name: str
@@ -45,7 +45,7 @@ class ProPlayers(SQLModel, table=True):
     It also stores their info, fantasy team, and accumulated season stats.
     """
 
-    __tablename__ = "pro_players"
+    __tablename__: ClassVar[str] = "pro_players"
 
     # --- Core Player Info ---
     player_id: int = Field(primary_key=True)  # This is the NHL ID
@@ -96,7 +96,7 @@ class ProPlayers(SQLModel, table=True):
 class PlayerGameStats(SQLModel, table=True):
     """Player statistics for individual games"""
 
-    __tablename__ = "player_game_stats"
+    __tablename__: ClassVar[str] = "player_game_stats"
 
     # Composite primary key
     game_id: int = Field(primary_key=True)
@@ -146,7 +146,7 @@ class PlayerGameStats(SQLModel, table=True):
 class GoalieGameStats(SQLModel, table=True):
     """Goalie statistics for individual games"""
 
-    __tablename__ = "goalie_game_stats"
+    __tablename__: ClassVar[str] = "goalie_game_stats"
 
     # Composite primary key
     game_id: int = Field(primary_key=True)

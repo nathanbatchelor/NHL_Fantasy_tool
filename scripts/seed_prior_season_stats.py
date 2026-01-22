@@ -10,7 +10,7 @@ before the current season starts.
 
 import asyncio
 import time
-from sqlmodel import Session, select, text
+from sqlmodel import Session, text
 from src.database.database import engine, init_db
 from src.database.models import ProPlayers
 from src.api.player_stats_fetcher import PlayerStatsProcessor
@@ -132,7 +132,7 @@ async def main():
 
         for i in range(0, len(all_game_ids), chunk_size):
             chunk = all_game_ids[i : i + chunk_size]
-            print(f"  Processing batch {i//chunk_size + 1}/{total_batches}...")
+            print(f"  Processing batch {i // chunk_size + 1}/{total_batches}...")
 
             # --- OPTIMIZATION: New processor instance per batch ---
             # This ensures we only hold 100 games in memory at a time

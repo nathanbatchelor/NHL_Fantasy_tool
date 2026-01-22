@@ -11,7 +11,7 @@ from sqlmodel import Session, select, func
 from src.database.database import engine
 from src.database.models import ProPlayers, PlayerGameStats, GoalieGameStats
 from src.core.constants import SEASON_ID
-from typing import Dict, Optional
+from typing import Dict
 
 
 def get_latest_skater_info(session: Session) -> Dict[int, dict]:

@@ -1,14 +1,8 @@
 import time
 import asyncio
 import httpx
-from tenacity import (
-    retry,
-    stop_after_attempt,
-    wait_exponential,
-    retry_if_exception_type,
-)
 
-from typing import DefaultDict, Dict, List, Any, Union, Optional, Tuple
+from typing import DefaultDict, Dict, List, Any, Union
 
 import src.core.constants as constants
 from sqlmodel import Session, select
@@ -26,13 +20,19 @@ from src.api.models import (
     FinalPlayerGameStats,
 )
 from collections import defaultdict
-from typing import List, Union, cast
 from datetime import datetime
 from src.utils.cache_utils import load_data_from_cache, save_data_to_cache
 
-# Import from nhl_api_utils as you had, assuming it's moved there.
-from .helpers import *
-
+from .helpers import (
+    fetch_game_boxscore,
+    fetch_player_log,
+    merge_skater_stats,
+    merge_goalie_stats,
+    get_opponent_abbrev,
+    calculate_fantasy_points_goalie,
+    calculate_fantasy_points_skater,
+    toi_to_seconds,
+)
 
 # --- MAIN PROCESSOR CLASS ---
 
@@ -338,8 +338,8 @@ class PlayerStatsProcessor:
 
             for player_id, stats in players.items():
                 opponent_abbrev = get_opponent_abbrev(boxscore, stats.teamAbbrev)
-                team_name = constants.TEAM_MAP.get(stats.teamAbbrev)
-                opponent_name = constants.TEAM_MAP.get(opponent_abbrev)
+                team_name = constants.TEAM_MAP.get(stats.teamAbbrev) or "Unknown"
+                opponent_name = constants.TEAM_MAP.get(opponent_abbrev) or "Unknown"
 
                 if stats.position in constants.GOALIE_POSITIONS:
                     # Goalie Record
@@ -471,7 +471,7 @@ class PlayerStatsProcessor:
 
         # Fetch all players to update in one query
         existing_players_list = session.exec(
-            select(ProPlayers).where(ProPlayers.player_id.in_(player_ids))
+            select(ProPlayers).where(ProPlayers.player_id in (player_ids))
         ).all()
         existing_players_map = {p.player_id: p for p in existing_players_list}
 
@@ -480,17 +480,21 @@ class PlayerStatsProcessor:
         # Process skaters
         for stat in new_skater_stats:
             player = existing_players_map.get(stat.player_id)
+            safe_player_name = stat.player_name or "Unknown"
             if not player:
                 # Create a new ProPlayer if they don't exist
                 player = ProPlayers(
-                    player_id=stat.player_id, is_active=True, is_goalie=False
+                    player_id=stat.player_id,
+                    is_active=True,
+                    is_goalie=False,
+                    player_name=safe_player_name,
                 )
                 session.add(player)
                 existing_players_map[stat.player_id] = player
-                print(f"    - Created new ProPlayer: {stat.player_name}")
+                print(f"    - Created new ProPlayer: {safe_player_name}")
 
             # Update player info (always use the latest game's info)
-            player.player_name = stat.player_name
+            player.player_name = safe_player_name
             player.team_abbrev = stat.team_abbrev
             player.position = stat.position
             player.jersey_number = stat.jersey_number
@@ -516,16 +520,19 @@ class PlayerStatsProcessor:
         # Process goalies
         for stat in new_goalie_stats:
             player = existing_players_map.get(stat.player_id)
+            safe_player_name = stat.player_name or "Unknown"
             if not player:
                 player = ProPlayers(
-                    player_id=stat.player_id, is_active=True, is_goalie=True
+                    player_id=stat.player_id,
+                    is_active=True,
+                    is_goalie=True,
+                    player_name=safe_player_name,
                 )
                 session.add(player)
                 existing_players_map[stat.player_id] = player
                 print(f"    - Created new ProPlayer: {stat.player_name}")
 
             # Update player info
-            player.player_name = stat.player_name
             player.team_abbrev = stat.team_abbrev
             player.position = stat.position  # "Goalie"
             player.jersey_number = stat.jersey_number
